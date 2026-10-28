@@ -143,6 +143,7 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
     emit_step = _make_step_emitter(_STEP_INITIAL, run_id, loop)
 
     def progress(msg: str):
+        print(f"[training:{run_id[:8]}] {msg}", flush=True)
         _logger.info("[%s] %s", run_id[:8], msg)
         emit_step(msg)
         _put(run_id, "progress", msg, loop)
@@ -231,6 +232,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
     emit_step = _make_step_emitter(_STEP_FINE_TUNE, run_id, loop)
 
     def progress(msg: str):
+        print(f"[training:{run_id[:8]}] {msg}", flush=True)
         _logger.info("[%s] %s", run_id[:8], msg)
         emit_step(msg)
         _put(run_id, "progress", msg, loop)
