@@ -251,7 +251,11 @@ export default function TrainingPage({ hasModel }: Props) {
             </div>
             <div className="metrics" style={{ marginTop: 12 }}>
               <div className="metric">
-                <div className="metric-label">F1 (macro)</div>
+                <div className="metric-label">F1 — known attacks</div>
+                <div className="metric-value">{fmt(activeModel.metrics?.known_attack_f1 ?? activeModel.metrics?.f1)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">F1 (all classes)</div>
                 <div className="metric-value">{fmt(activeModel.metrics?.f1)}</div>
               </div>
               <div className="metric">
@@ -269,6 +273,10 @@ export default function TrainingPage({ hasModel }: Props) {
               <div className="metric">
                 <div className="metric-label">AMR</div>
                 <div className="metric-value">{fmt(activeModel.metrics?.amr)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">AE threshold</div>
+                <div className="metric-value">{fmt(activeModel.metrics?.ae_threshold)}</div>
               </div>
               <div className="metric">
                 <div className="metric-label">Train rows</div>
@@ -369,11 +377,11 @@ export default function TrainingPage({ hasModel }: Props) {
               <thead>
                 <tr>
                   <th>Name</th>
-                  <th>F1</th>
-                  <th>PR-AUC</th>
-                  <th>Recall</th>
+                  <th>F1 (known)</th>
+                  <th>F1 (macro)</th>
                   <th>FAR</th>
                   <th>AMR</th>
+                  <th>AE threshold</th>
                   <th>Status</th>
                   <th>Created</th>
                 </tr>
@@ -384,11 +392,11 @@ export default function TrainingPage({ hasModel }: Props) {
                     <td style={{ fontSize: 13 }}>
                       {m.name ?? `Classifier:${m.classifier_type} | Detector:${m.detector_type} | v${m.id}`}
                     </td>
+                    <td>{fmt(m.metrics?.known_attack_f1 ?? m.metrics?.f1)}</td>
                     <td>{fmt(m.metrics?.f1)}</td>
-                    <td>{fmt(m.metrics?.pr_auc)}</td>
-                    <td>{fmt(m.metrics?.recall)}</td>
                     <td>{fmt(m.metrics?.far)}</td>
                     <td>{fmt(m.metrics?.amr)}</td>
+                    <td>{fmt(m.metrics?.ae_threshold)}</td>
                     <td>
                       <span className={`badge ${m.status === 'active' ? 'badge-green' : m.status === 'failed' ? 'badge-red' : 'badge-yellow'}`}>
                         {m.status}

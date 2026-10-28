@@ -178,10 +178,12 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
             "f1": result["f1"],
             "far": result["far"],
             "amr": result["amr"],
+            "known_attack_f1": result.get("known_attack_f1", 0.0),
             "train_rows": result.get("train_rows", 0),
             "val_rows": result.get("val_rows", 0),
             "test_rows": result.get("test_rows", 0),
             "ae_threshold": result.get("ae_threshold"),
+            "training_duration_s": result.get("training_duration_s"),
             "savepoint_id": sp.id,
         }
         mv = activate_model_version(db, version_id, metrics)

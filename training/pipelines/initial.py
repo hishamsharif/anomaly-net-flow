@@ -153,7 +153,25 @@ def run(
         y_pred   = list(raw_pred)
         y_scores = None
     metrics = _compute_metrics(y_test, y_pred, y_scores)
-    progress(f"Test  F1={metrics['f1']:.4f}  FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}")
+    # Known-attack F1: only test rows whose true class was seen in training.
+    # Novel attacks (not in training) get F1=0 in the macro avg — masking them
+    # gives a fairer picture of how well the classifier handles known attacks.
+    trained_classes = set(clf.classes_) if hasattr(clf, "classes_") else set()
+    known_mask = np.array([label in trained_classes for label in y_test])
+    if known_mask.sum() > 0:
+        km = _compute_metrics(
+            np.array(y_test)[known_mask],
+            np.array(y_pred)[known_mask],
+            y_scores[known_mask] if y_scores is not None else None,
+        )
+        metrics["known_attack_f1"] = km["f1"]
+    else:
+        metrics["known_attack_f1"] = 0.0
+    progress(
+        f"Test  F1(macro)={metrics['f1']:.4f}  "
+        f"F1(known-attacks)={metrics['known_attack_f1']:.4f}  "
+        f"FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}"
+    )
 
     # 9. Train anomaly detector on benign flows only
     progress(f"Training {detector_type} anomaly detector on benign flows ...")
@@ -202,11 +220,13 @@ def run(
         "started_at":             started_at,
         "completed_at":           completed_at,
         "training_duration_s":    round(completed_at - started_at, 1),
+        "known_attack_f1":        metrics.get("known_attack_f1", 0.0),
     }
     with open(os.path.join(artefact_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
 
-    return {**metrics, **metadata, "artefact_dir": artefact_dir}
+    return {**metrics, **metadata, "artefact_dir": artefact_dir,
+            "known_attack_f1": metrics.get("known_attack_f1", 0.0)}
 
 
 def _compute_metrics(y_true, y_pred, y_scores: np.ndarray | None = None) -> dict:
