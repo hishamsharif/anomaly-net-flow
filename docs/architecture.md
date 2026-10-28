@@ -302,10 +302,13 @@ anomaly-net-flow/
 
 ## Confirmed Decisions
 
-- **Day-based split** is the mandatory default (Mon–Thu train / Fri val / Fri-afternoon test).
+- **Day-based split** is the mandatory default (Mon–Thu train / Fri val / Fri-afternoon test). CSVs are loaded in Mon→Fri alphabetical day-name order before the 80/10/10 row split.
+- **Detector scaler = QuantileTransformer** (not RobustScaler). CIC-IDS2017 sparse features (e.g. `Flow Bytes/s`) have IQR≈0; RobustScaler sets `scale_=1` so outliers reach the AE unscaled, producing threshold of 38M. QuantileTransformer maps any distribution to [0,1] — threshold is ~0.01–0.1.
+- **SMOTE cap = 50K per minority class** (configurable `SMOTE_MAX_PER_CLASS`). Default SMOTE makes all classes equal to the BENIGN majority (~1.5M rows) — 10 classes × 1.5M = 17.4M synthetic samples, 8+ hour training. Cap at 50K → ~2M total → 5–15 min training.
 - **v1 models:** XGBoost or Random Forest (supervised) + MLP Autoencoder (anomaly). FT-Transformer + Transformer-AE as upgrade path.
 - **XGBoost fine-tuning** is always full cumulative retrain — trees are additive, not weights.
 - **AE fine-tuning** uses weight-based incremental fine-tune: load previous weights → freeze encoder → unfreeze.
 - **Both analyst_confirmed and analyst_override** are appended to `labelled_flows`.
 - **PCAP/CSV uploads are inference-only** — they never touch the training store directly.
 - **SQLite + DuckDB**: SQLite (file-based, no server) for operational writes (analyst verdicts, model versions, alerts); DuckDB in-process attaches SQLite and reads CIC-IDS2017 CSV files directly at training time — no import, no database server needed.
+- **GPU/CUDA**: MLP-AE auto-detects CUDA (`torch.cuda.is_available()`). State dicts saved on CPU for device-portable joblib files. XGBoost uses `tree_method="hist"` (change to `device="cuda"` for GPU-accelerated trees).
