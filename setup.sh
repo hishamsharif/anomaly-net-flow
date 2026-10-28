@@ -89,9 +89,9 @@ fi
 
 # ── 7. Create required runtime directories ────────────────────────────────
 step "Creating runtime directories"
-mkdir -p models logs data/CIC-IDS2017
+mkdir -p models logs
 touch models/.gitkeep logs/.gitkeep
-ok "models/  logs/  data/CIC-IDS2017/  ready"
+ok "models/  logs/  ready"
 
 # ── 8. Check for CIC-IDS2017 dataset ──────────────────────────────────────
 step "Checking CIC-IDS2017 dataset"
