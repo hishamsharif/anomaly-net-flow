@@ -5,14 +5,14 @@
 # Usage:  bash ops.sh <command>
 #
 # Commands:
-#   start               Start the API (training runs inside it as threads)
-#   stop                Stop the API
-#   restart             Restart the API
-#   status              Show whether the API is running + health check
-#   logs                Tail the API log (Ctrl-C to exit)
-#   ui                  Start the React UI dev server  (port 5173)
-#   train [mode]        Trigger training — mode: initial (default) | fine_tune
-#   open                Open the UI in your default browser
+#   start                            Start the API (training runs inside it as threads)
+#   stop                             Stop the API
+#   restart                          Restart the API
+#   status                           Show whether the API is running + health check
+#   logs                             Tail the API log (Ctrl-C to exit)
+#   ui                               Start the React UI dev server  (port 5173)
+#   train [mode] [clf] [det] [--follow]   Trigger training (see help for details)
+#   open                             Open the UI in your default browser
 #
 # Run setup.sh first if you haven't already.
 # =============================================================================
@@ -218,28 +218,48 @@ cmd_ui() {
 
 cmd_train() {
   local mode="${1:-initial}"
+  local clf="${2:-xgboost}"
+  local det="${3:-mlp_ae}"
+  local follow=0
+  # --follow anywhere in args enables live SSE stream
+  for arg in "$@"; do [[ "$arg" == "--follow" ]] && follow=1; done
+
   if [[ "$mode" != "initial" && "$mode" != "fine_tune" ]]; then
     fail "Unknown mode '$mode'. Use: initial | fine_tune"
   fi
   if ! curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
     fail "API is not running. Start it first:  bash ops.sh start"
   fi
-  info "Submitting training job (mode: ${mode}) ..."
+  info "Submitting training job (mode=${mode}  clf=${clf}  det=${det}) ..."
   resp=$(curl -s -X POST "http://localhost:${API_PORT}/api/training/start" \
     -H "Content-Type: application/json" \
-    -d "{\"mode\":\"${mode}\"}")
+    -d "{\"mode\":\"${mode}\",\"classifier_type\":\"${clf}\",\"detector_type\":\"${det}\"}")
   run_id=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('run_id','ERROR'))" 2>/dev/null || echo "ERROR")
+  est=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('estimated_label','?'))" 2>/dev/null || echo "?")
   if [ "$run_id" = "ERROR" ]; then
     fail "Failed to start training. Response: $resp"
   fi
   sep
-  ok "Training started  —  mode: ${mode}"
-  ok "Run ID: ${run_id}"
-  info "Stream live progress:"
+  ok "Training started  —  mode: ${mode}  |  clf: ${clf}  |  det: ${det}"
+  ok "Run ID:            ${run_id}"
+  ok "Estimated time:    ${est}"
   echo ""
-  echo "    curl -N http://localhost:${API_PORT}/api/training/events/${run_id}"
-  echo ""
-  info "Or watch the Training tab in the UI: http://localhost:${UI_PORT}"
+  if [ "$follow" -eq 1 ]; then
+    info "Following SSE progress (Ctrl-C to stop following — training continues in background):"
+    echo ""
+    curl -N --no-buffer "http://localhost:${API_PORT}/api/training/events/${run_id}" 2>/dev/null \
+      | while IFS= read -r line; do
+          [[ "$line" == data:* ]] && echo -e "  ${CYAN}→${NC}  ${line#data: }"
+        done
+    echo ""
+    ok "Done."
+  else
+    info "Stream live progress:"
+    echo ""
+    echo "    curl -N http://localhost:${API_PORT}/api/training/events/${run_id}"
+    echo ""
+    info "Or watch the Training tab in the UI: http://localhost:${UI_PORT}"
+  fi
   sep
 }
 
@@ -265,7 +285,11 @@ cmd_help() {
   echo -e "  ${CYAN}status${NC}             Show running status + health check"
   echo -e "  ${CYAN}logs${NC}               Tail the background log (Ctrl-C to exit)"
   echo -e "  ${CYAN}ui${NC}                 Start the React UI  (port ${UI_PORT})"
-  echo -e "  ${CYAN}train [mode]${NC}       Start training — mode: initial (default) | fine_tune"
+  echo -e "  ${CYAN}train [mode] [clf] [det] [--follow]${NC}"
+  echo -e "                     Start training.  mode: initial (default) | fine_tune"
+  echo -e "                     clf: xgboost (default) | random_forest"
+  echo -e "                     det: mlp_ae (default) | isolation_forest"
+  echo -e "                     --follow: stream SSE progress to terminal"
   echo -e "  ${CYAN}open${NC}               Open the UI in your browser"
   echo -e "  ${CYAN}verify${NC}             Check setup is complete and ready to run"
   echo ""
@@ -286,7 +310,7 @@ case "$COMMAND" in
   status)  cmd_status ;;
   logs)    cmd_logs ;;
   ui)      cmd_ui ;;
-  train)   cmd_train "${1:-initial}" ;;
+  train)   cmd_train "${1:-initial}" "${2:-xgboost}" "${3:-mlp_ae}" "${@:4}" ;;
   open)    cmd_open ;;
   verify)  _verify_setup && ok "Setup verified — ready to run." ;;
   help|--help|-h) cmd_help ;;

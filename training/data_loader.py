@@ -19,19 +19,41 @@ def _conn() -> duckdb.DuckDBPyConnection:
     return conn
 
 
+_DAY_ORDER = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4}
+
+
+def _sort_csvs_by_day(paths: list[str]) -> list[str]:
+    """
+    Sort CIC-IDS2017 CSVs Monday→Friday so the 80/10/10 time-ordered split
+    always puts Mon-Thu in training and Fri in val/test.
+    Files without a recognisable day name sort last.
+    """
+    import os
+
+    def key(p: str) -> tuple[int, str]:
+        name = os.path.basename(p).lower()
+        for day, rank in _DAY_ORDER.items():
+            if day in name:
+                return (rank, p)
+        return (99, p)
+
+    return sorted(paths, key=key)
+
+
 def load_initial(bundled_dir: str) -> pd.DataFrame:
-    """Load all CIC-IDS2017 CSV files from the bundled dataset directory."""
+    """Load all CIC-IDS2017 CSV files in chronological (Mon→Fri) order."""
     import glob
     import os
     paths = glob.glob(os.path.join(bundled_dir, "**/*.csv"), recursive=True)
     if not paths:
         raise FileNotFoundError(f"No CSV files found in {bundled_dir}")
+    paths = _sort_csvs_by_day(paths)
+    dfs = []
     conn = duckdb.connect(":memory:")
-    df = conn.execute(
-        f"SELECT * FROM read_csv_auto({paths!r}, union_by_name=True)"
-    ).df()
+    for p in paths:
+        dfs.append(conn.execute(f"SELECT * FROM read_csv_auto('{p}')").df())
     conn.close()
-    return df
+    return pd.concat(dfs, ignore_index=True)
 
 
 def load_cumulative(max_flow_id: int) -> pd.DataFrame:

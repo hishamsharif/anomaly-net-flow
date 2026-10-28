@@ -48,7 +48,7 @@ class MLPAutoencoder:
 
     preprocessing = PreprocessingSpec(
         needs_scaling=True,
-        preferred_scalers=("robust", "quantile"),
+        preferred_scalers=("quantile", "robust"),  # quantile first: handles IQR=0 sparse features
         supervised=False,
     )
 
@@ -71,9 +71,13 @@ class MLPAutoencoder:
         self.threshold: float | None = None
         self.input_dim: int | None = None
 
+    @staticmethod
+    def _device() -> "torch.device":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     def fit(self, X_benign: np.ndarray) -> None:
         self.input_dim = X_benign.shape[1]
-        self._net = _AENet(self.input_dim, self.hidden_dims)
+        self._net = _AENet(self.input_dim, self.hidden_dims).to(self._device())
         self._train(X_benign, freeze_encoder_epochs=0)
         self.threshold = float(
             np.percentile(self._reconstruction_errors(X_benign),
@@ -84,6 +88,7 @@ class MLPAutoencoder:
                   X_replay: np.ndarray | None = None) -> None:
         if self._net is None:
             raise RuntimeError("Call fit() or load() before fine_tune().")
+        self._net = self._net.to(self._device())
         X = np.vstack([X_incremental, X_replay]) if X_replay is not None else X_incremental
         self._train(X, freeze_encoder_epochs=self.freeze_epochs)
         self.threshold = float(
@@ -101,10 +106,11 @@ class MLPAutoencoder:
         High error on a feature = AE failed to reconstruct it = anomalous feature.
         Use this in the analyst alert panel instead of SHAP.
         """
+        device = self._device()
         self._net.eval()
         with torch.no_grad():
-            t = torch.tensor(x.reshape(1, -1), dtype=torch.float32)
-            recon = self._net(t).numpy()
+            t = torch.tensor(x.reshape(1, -1), dtype=torch.float32).to(device)
+            recon = self._net(t).cpu().numpy()
         return ((x.reshape(1, -1) - recon) ** 2).flatten()
 
     def is_anomaly(self, x: np.ndarray) -> tuple[bool, float]:
@@ -112,7 +118,8 @@ class MLPAutoencoder:
         return s > (self.threshold or 0.0), s
 
     def _train(self, X: np.ndarray, freeze_encoder_epochs: int) -> None:
-        net = self._net
+        device = self._device()
+        net = self._net.to(device)
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         criterion = nn.MSELoss()
         tensor = torch.tensor(X, dtype=torch.float32)
@@ -124,21 +131,25 @@ class MLPAutoencoder:
                 p.requires_grad = not frozen
             net.train()
             for (batch,) in loader:
+                batch = batch.to(device)
                 optimizer.zero_grad()
                 loss = criterion(net(batch), batch)
                 loss.backward()
                 optimizer.step()
 
     def _reconstruction_errors(self, X: np.ndarray) -> np.ndarray:
+        device = self._device()
         self._net.eval()
         with torch.no_grad():
-            t = torch.tensor(X, dtype=torch.float32)
-            recon = self._net(t).numpy()
+            t = torch.tensor(X, dtype=torch.float32).to(device)
+            recon = self._net(t).cpu().numpy()
         return np.mean((X - recon) ** 2, axis=1)
 
     def save(self, path: str) -> None:
+        # Move state_dict to CPU so the file loads on any device (CPU or GPU)
+        sd = {k: v.cpu() for k, v in self._net.state_dict().items()} if self._net else None
         joblib.dump({
-            "state_dict":   self._net.state_dict() if self._net else None,
+            "state_dict":   sd,
             "hidden_dims":  self.hidden_dims,
             "input_dim":    self.input_dim,
             "threshold":    self.threshold,
@@ -165,4 +176,5 @@ class MLPAutoencoder:
         if d["state_dict"] and d["input_dim"]:
             obj._net = _AENet(d["input_dim"], d["hidden_dims"])
             obj._net.load_state_dict(d["state_dict"])
+            obj._net = obj._net.to(cls._device())
         return obj

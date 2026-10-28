@@ -8,6 +8,7 @@ DB writes use a sync SQLAlchemy session (safe alongside the async session on SQL
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -15,6 +16,8 @@ import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
+
+_logger = logging.getLogger("anomaly_net_flow.training")
 
 _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="training")
 
@@ -140,6 +143,7 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
     emit_step = _make_step_emitter(_STEP_INITIAL, run_id, loop)
 
     def progress(msg: str):
+        _logger.info("[%s] %s", run_id[:8], msg)
         emit_step(msg)
         _put(run_id, "progress", msg, loop)
 
@@ -225,6 +229,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
     emit_step = _make_step_emitter(_STEP_FINE_TUNE, run_id, loop)
 
     def progress(msg: str):
+        _logger.info("[%s] %s", run_id[:8], msg)
         emit_step(msg)
         _put(run_id, "progress", msg, loop)
 

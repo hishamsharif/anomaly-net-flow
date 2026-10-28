@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     ae_anomaly_threshold_percentile: float = 95.0
     ae_replay_buffer_fraction: float = 0.10
     ae_freeze_epochs: int = 5
+    smote_max_per_class: int = 50_000      # max samples per minority class after SMOTE
 
     # Feature engineering — tune these to trade feature count for performance
     # Step 1: drop near-constant features  (0 = constants only, 0.01, 0.05 progressively stricter)

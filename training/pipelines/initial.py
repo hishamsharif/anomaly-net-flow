@@ -14,6 +14,8 @@ Feature engineering (stages 1-3 shared; stage 4 per-model-path):
 from __future__ import annotations
 import json
 import os
+import time
+from collections import Counter
 from typing import Callable
 
 import numpy as np
@@ -41,6 +43,8 @@ def run(
     def progress(msg: str):
         if on_progress:
             on_progress(msg)
+
+    started_at = time.time()
 
     from api.config import settings as cfg
     from core.registry import get_classifier, get_detector
@@ -96,11 +100,18 @@ def run(
 
     clf_scaler_type = (
         "none" if not clf_cls.preprocessing.needs_scaling
-        else cfg.scaler_type
+        else (clf_cls.preprocessing.preferred_scalers[0]
+              if clf_cls.preprocessing.preferred_scalers[0] != "none"
+              else cfg.scaler_type)
     )
+    # Detector scaler: use the model's first preferred scaler (e.g. QuantileTransformer
+    # for MLP-AE) rather than the global cfg.scaler_type. RobustScaler breaks on
+    # CIC-IDS2017 sparse features (IQR≈0 → scale_=1 → unscaled outliers reach the AE).
     det_scaler_type = (
         "none" if not det_cls.preprocessing.needs_scaling
-        else cfg.scaler_type
+        else (det_cls.preprocessing.preferred_scalers[0]
+              if det_cls.preprocessing.preferred_scalers[0] != "none"
+              else cfg.scaler_type)
     )
     progress(f"Scaler -- classifier: {clf_scaler_type}  detector: {det_scaler_type}")
 
@@ -111,9 +122,20 @@ def run(
     X_det_tr, X_det_v, X_det_te = FeatureEngineeringPipeline.apply_scaler(
         fe_result, det_scaler_type, artefact_dir, "det_scaler.joblib")
 
-    # 6. SMOTE on classifier train split
-    progress("Applying SMOTE to training split ...")
-    smote = SMOTE(random_state=42)
+    # 6. SMOTE on classifier train split (capped per minority class to avoid 10M+ rows)
+    smote_cap = getattr(cfg, "smote_max_per_class", 50_000)
+    counts = Counter(y_train)
+    majority_count = max(counts.values())
+    target = min(majority_count, smote_cap)
+    sampling_strategy = {
+        cls: target for cls, cnt in counts.items() if cnt < target
+    }
+    n_minority = sum(1 for cnt in counts.values() if cnt < target)
+    progress(
+        f"Applying SMOTE to training split "
+        f"(cap={target:,}/class, {n_minority} minority classes) ..."
+    )
+    smote = SMOTE(random_state=42, sampling_strategy=sampling_strategy)
     X_clf_bal, y_clf_bal = smote.fit_resample(X_clf_tr, y_train)
 
     # 7. Train classifier
@@ -160,6 +182,7 @@ def run(
     det.save(os.path.join(artefact_dir, "detector.joblib"))
     FeatureEngineeringPipeline.save_artefacts(fe_result, artefact_dir)
 
+    completed_at = time.time()
     metadata = {
         "feature_names":          list(X_raw.columns),
         "selected_feature_names": sel_names,
@@ -175,6 +198,10 @@ def run(
         "variance_threshold":     cfg.variance_threshold,
         "correlation_threshold":  cfg.correlation_threshold,
         "feature_selection_k":    cfg.feature_selection_k,
+        "smote_max_per_class":    smote_cap,
+        "started_at":             started_at,
+        "completed_at":           completed_at,
+        "training_duration_s":    round(completed_at - started_at, 1),
     }
     with open(os.path.join(artefact_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
