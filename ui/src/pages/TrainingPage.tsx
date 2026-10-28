@@ -4,6 +4,7 @@ interface Props { hasModel: boolean | null }
 
 interface ModelInfo {
   id: number
+  name: string | null
   classifier_type: string
   detector_type: string
   status: string
@@ -13,6 +14,7 @@ interface ModelInfo {
 
 interface ModelHistory {
   id: number
+  name: string | null
   classifier_type: string
   detector_type: string
   status: string
@@ -130,12 +132,11 @@ export default function TrainingPage({ hasModel }: Props) {
           <div className="card">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
-                <strong>Active model v{activeModel.id}</strong>{' '}
+                <strong>
+                  {activeModel.name ?? `Classifier:${activeModel.classifier_type} | Detector:${activeModel.detector_type} | v${activeModel.id}`}
+                </strong>{' '}
                 <span className="badge badge-green">active</span>
               </div>
-              <small style={{ color: 'var(--fg-muted)' }}>
-                {activeModel.classifier_type} + {activeModel.detector_type}
-              </small>
             </div>
             <div className="metrics">
               <div className="metric">
@@ -214,8 +215,7 @@ export default function TrainingPage({ hasModel }: Props) {
             <table>
               <thead>
                 <tr>
-                  <th>Version</th>
-                  <th>Type</th>
+                  <th>Name</th>
                   <th>F1</th>
                   <th>PR-AUC</th>
                   <th>Recall</th>
@@ -228,8 +228,9 @@ export default function TrainingPage({ hasModel }: Props) {
               <tbody>
                 {history.map(m => (
                   <tr key={m.id}>
-                    <td>v{m.id}</td>
-                    <td style={{ fontSize: 12 }}>{m.classifier_type} + {m.detector_type}</td>
+                    <td style={{ fontSize: 13 }}>
+                      {m.name ?? `Classifier:${m.classifier_type} | Detector:${m.detector_type} | v${m.id}`}
+                    </td>
                     <td>{fmt(m.metrics?.f1)}</td>
                     <td>{fmt(m.metrics?.pr_auc)}</td>
                     <td>{fmt(m.metrics?.recall)}</td>

@@ -39,11 +39,12 @@ class ModelVersion(Base):
     __tablename__ = "model_versions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    classifier_type: Mapped[str] = mapped_column(String(64))   # xgboost | ft_transformer
-    detector_type: Mapped[str] = mapped_column(String(64))     # vanilla_ae | transformer_ae
-    artefact_path: Mapped[str] = mapped_column(Text)
+    name: Mapped[str | None] = mapped_column(String(128))      # human label, set after ID is known
+    classifier_type: Mapped[str] = mapped_column(String(64))   # xgboost | random_forest | …
+    detector_type: Mapped[str] = mapped_column(String(64))     # vanilla_ae | isolation_forest | …
+    artefact_path: Mapped[str] = mapped_column(Text, default="")
     metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
-    # training | active | archived
+    # training | active | archived | failed
     status: Mapped[str] = mapped_column(String(16), default="training")
     savepoint_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("training_savepoints.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

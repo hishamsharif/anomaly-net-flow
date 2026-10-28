@@ -12,6 +12,7 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 class ModelVersionOut(BaseModel):
     id: int
+    name: str | None
     classifier_type: str
     detector_type: str
     artefact_path: str
@@ -23,6 +24,7 @@ class ModelVersionOut(BaseModel):
     def from_orm(cls, mv: ModelVersion) -> "ModelVersionOut":
         return cls(
             id=mv.id,
+            name=mv.name,
             classifier_type=mv.classifier_type,
             detector_type=mv.detector_type,
             artefact_path=mv.artefact_path,

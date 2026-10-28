@@ -47,17 +47,36 @@ def _cleanup_later(run_id: str, delay: float = 120.0) -> None:
 
 # ── Training workers ──────────────────────────────────────────────────────────
 
+_CLF_DISPLAY = {
+    "xgboost": "XGBoost",
+    "random_forest": "RF",
+}
+_DET_DISPLAY = {
+    "vanilla_ae": "AE",
+    "isolation_forest": "IF",
+}
+
+
+def _version_name(clf: str, det: str, vid: int) -> str:
+    c = _CLF_DISPLAY.get(clf, clf.replace("_", " ").title())
+    d = _DET_DISPLAY.get(det, det.replace("_", " ").title())
+    return f"Classifier:{c} | Detector:{d} | v{vid}"
+
+
+def _version_dir(clf: str, det: str, vid: int) -> str:
+    return f"{clf}_{det}_v{vid}"
+
+
 def _run_initial(run_id: str, classifier_type: str, detector_type: str) -> None:
     from app.config import settings
     from app.database import get_sync_db
     from app.db.crud import (
-        create_model_version, activate_model_version,
-        fail_model_version, create_savepoint, create_training_run,
-        finish_training_run,
+        create_model_version, set_model_version_path_and_name,
+        activate_model_version, fail_model_version,
+        create_savepoint, create_training_run, finish_training_run,
     )
     from app.ml.model_store import model_store
     from training.pipelines.initial import run as pipeline_run
-    from training.data_loader import get_max_flow_id
 
     loop = asyncio.get_event_loop()
 
@@ -67,10 +86,17 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str) -> None:
     db = get_sync_db()
     version_id = None
     try:
-        # Create ModelVersion row immediately so we have an ID for the artefact dir
-        artefact_dir = os.path.join(settings.model_artefact_dir, f"v{run_id[:8]}_initial")
-        mv = create_model_version(db, classifier_type, detector_type, artefact_dir)
+        # Create row first to obtain the auto-increment ID
+        mv = create_model_version(db, classifier_type, detector_type)
         version_id = mv.id
+        # Now we know the ID — build the human-readable name and dir
+        artefact_dir = os.path.join(
+            settings.model_artefact_dir,
+            _version_dir(classifier_type, detector_type, version_id),
+        )
+        name = _version_name(classifier_type, detector_type, version_id)
+        set_model_version_path_and_name(db, version_id, artefact_dir, name)
+        progress(f"Registered {name}")
         create_training_run(db, run_id, "initial", version_id)
 
         result = pipeline_run(
@@ -107,7 +133,7 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str) -> None:
             metrics=metrics,
         )
 
-        _put(run_id, "done", f"Training complete — model v{mv.id} active", loop)
+        _put(run_id, "done", f"Training complete — {name} active", loop)
 
     except Exception as exc:
         err = str(exc)
@@ -126,9 +152,10 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str) -> Non
     from app.config import settings
     from app.database import get_sync_db
     from app.db.crud import (
-        create_model_version, activate_model_version,
-        fail_model_version, create_savepoint, create_training_run,
-        finish_training_run, get_active_model_version, get_savepoint_for_version,
+        create_model_version, set_model_version_path_and_name,
+        activate_model_version, fail_model_version,
+        create_savepoint, create_training_run, finish_training_run,
+        get_active_model_version, get_savepoint_for_version,
     )
     from app.ml.model_store import model_store
     from training.pipelines.fine_tune import run as pipeline_run
@@ -148,9 +175,15 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str) -> Non
         prev_sp = get_savepoint_for_version(db, prev_mv.id)
         prev_max_id = prev_sp.max_flow_id if prev_sp else 0
 
-        artefact_dir = os.path.join(settings.model_artefact_dir, f"v{run_id[:8]}_ft")
-        mv = create_model_version(db, classifier_type, detector_type, artefact_dir)
+        mv = create_model_version(db, classifier_type, detector_type)
         version_id = mv.id
+        artefact_dir = os.path.join(
+            settings.model_artefact_dir,
+            _version_dir(classifier_type, detector_type, version_id),
+        )
+        name = _version_name(classifier_type, detector_type, version_id)
+        set_model_version_path_and_name(db, version_id, artefact_dir, name)
+        progress(f"Registered {name}")
         create_training_run(db, run_id, "fine_tune", version_id)
 
         result = pipeline_run(
@@ -187,7 +220,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str) -> Non
             metrics=metrics,
         )
 
-        _put(run_id, "done", f"Fine-tune complete — model v{mv.id} active", loop)
+        _put(run_id, "done", f"Fine-tune complete — {name} active", loop)
 
     except Exception as exc:
         err = str(exc)

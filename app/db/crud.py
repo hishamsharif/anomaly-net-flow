@@ -20,16 +20,29 @@ def create_model_version(
     db: Session,
     classifier_type: str,
     detector_type: str,
-    artefact_path: str,
     status: str = "training",
 ) -> ModelVersion:
+    """Create a ModelVersion row. artefact_path and name are set afterwards via
+    set_model_version_path_and_name() once the auto-increment ID is known."""
     mv = ModelVersion(
         classifier_type=classifier_type,
         detector_type=detector_type,
-        artefact_path=artefact_path,
+        artefact_path="",
         status=status,
     )
     db.add(mv)
+    db.commit()
+    db.refresh(mv)
+    return mv
+
+
+def set_model_version_path_and_name(
+    db: Session, version_id: int, artefact_path: str, name: str
+) -> ModelVersion:
+    """Update artefact_path and name once the versioned directory has been determined."""
+    mv = db.get(ModelVersion, version_id)
+    mv.artefact_path = artefact_path
+    mv.name = name
     db.commit()
     db.refresh(mv)
     return mv
