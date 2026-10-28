@@ -80,7 +80,7 @@ async def promote_model(model_id: int, db: AsyncSession = Depends(get_db)):
     await db.refresh(target)
 
     # Reload into model_store
-    from app.ml.model_store import model_store
+    from app.learning.model_store import model_store
     import os
     if os.path.isdir(target.artefact_path):
         model_store.load_from_dir(

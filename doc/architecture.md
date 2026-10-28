@@ -85,7 +85,7 @@
 | Explainability (MLP-AE) | Per-feature reconstruction error `(x − x̂)²` — no SHAP needed | — |
 | Metrics | F1 macro, PR-AUC, Recall, FAR, AMR | — |
 | Training reads | DuckDB in-process | — |
-| Component registry | `app/ml/registry.py` — add class + one line | — |
+| Component registry | `app/learning/registry.py` — add class + one line | — |
 | Fine-tune XGBoost | Full cumulative retrain (no weight carry-over) | Warm-start trees at > 10 M rows |
 | Fine-tune AE | Load weights → freeze encoder → fine-tune + replay | Shared encoder joint fine-tuning |
 | Fine-tune IF | Full retrain on cumulative benign flows (no weight carry-over) | — |

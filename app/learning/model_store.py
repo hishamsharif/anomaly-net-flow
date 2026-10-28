@@ -42,7 +42,7 @@ class ModelStore:
         metrics: dict,
     ) -> None:
         import joblib, json, os
-        from app.ml.registry import get_classifier, get_detector
+        from app.learning.registry import get_classifier, get_detector
 
         clf_path = os.path.join(artefact_dir, "classifier.joblib")
         det_path = os.path.join(artefact_dir, "detector.joblib")

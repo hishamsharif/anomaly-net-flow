@@ -5,12 +5,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from app.ml.base import BaseClassifier, BaseAnomalyDetector
+    from app.learning.base import BaseClassifier, BaseAnomalyDetector
 
-from app.ml.classifiers.xgboost_clf import XGBoostClassifier
-from app.ml.classifiers.random_forest_clf import RandomForestClassifier
-from app.ml.detectors.mlp_ae import MLPAutoencoder
-from app.ml.detectors.isolation_forest import IsolationForestDetector
+from app.learning.classifiers.xgboost_clf import XGBoostClassifier
+from app.learning.classifiers.random_forest_clf import RandomForestClassifier
+from app.learning.detectors.mlp_ae import MLPAutoencoder
+from app.learning.detectors.isolation_forest import IsolationForestDetector
 
 # Supervised classifiers: name → class
 # Upgrade path: add FT-Transformer here when ready.

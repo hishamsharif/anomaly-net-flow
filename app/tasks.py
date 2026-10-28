@@ -76,7 +76,7 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
         activate_model_version, fail_model_version,
         create_savepoint, create_training_run, finish_training_run,
     )
-    from app.ml.model_store import model_store
+    from app.learning.model_store import model_store
     from training.pipelines.initial import run as pipeline_run
 
     def progress(msg: str):
@@ -157,7 +157,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
         create_savepoint, create_training_run, finish_training_run,
         get_active_model_version, get_savepoint_for_version,
     )
-    from app.ml.model_store import model_store
+    from app.learning.model_store import model_store
     from training.pipelines.fine_tune import run as pipeline_run
 
     def progress(msg: str):

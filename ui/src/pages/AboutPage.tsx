@@ -53,7 +53,7 @@ export default function AboutPage() {
         <p>
           <strong>Upgrade path:</strong> FT-Transformer (true weight-based fine-tuning),
           Transformer-AE (self-attention over feature tokens — correct inductive bias for tabular data).
-          Add one line to <code>app/ml/registry.py</code> to expose a new model in this UI.
+          Add one line to <code>app/learning/registry.py</code> to expose a new model in this UI.
         </p>
       </div>
 

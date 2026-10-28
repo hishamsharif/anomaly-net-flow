@@ -199,8 +199,8 @@ Key settings:
 
 ## Extending with a new model
 
-1. Create `app/ml/classifiers/my_model.py` implementing `BaseClassifier` (`app/ml/base.py`)
-2. Add one line to `app/ml/registry.py`:
+1. Create `app/learning/classifiers/my_model.py` implementing `BaseClassifier` (`app/learning/base.py`)
+2. Add one line to `app/learning/registry.py`:
    ```python
    CLASSIFIERS["my_model"] = MyModelClassifier
    ```

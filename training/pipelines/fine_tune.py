@@ -57,7 +57,7 @@ def run(
     X_clf, y_clf = _extract(df_cumulative, scaler, vt)
     progress(f"  {len(X_clf):,} rows")
 
-    from app.ml.registry import get_classifier, get_detector
+    from app.learning.registry import get_classifier, get_detector
     clf_cls = get_classifier(classifier_type)
     clf = clf_cls()
     progress(f"Training {classifier_type} …")

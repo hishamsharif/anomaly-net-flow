@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.ml.registry import CLASSIFIERS, ANOMALY_DETECTORS
+from app.learning.registry import CLASSIFIERS, ANOMALY_DETECTORS
 from app import tasks
 
 router = APIRouter(prefix="/training", tags=["training"])

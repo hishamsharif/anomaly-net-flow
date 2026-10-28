@@ -16,7 +16,7 @@ def _load_active_model_on_startup() -> None:
     """
     from app.database import get_sync_db
     from app.db.crud import get_active_model_version
-    from app.ml.model_store import model_store
+    from app.learning.model_store import model_store
 
     db = get_sync_db()
     try:

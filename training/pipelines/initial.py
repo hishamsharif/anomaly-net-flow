@@ -86,7 +86,7 @@ def run(
 
     # ── 6. Train classifier ───────────────────────────────────────────────
     progress(f"Training {classifier_type} classifier …")
-    from app.ml.registry import get_classifier, get_detector
+    from app.learning.registry import get_classifier, get_detector
     clf_cls = get_classifier(classifier_type)
     clf = clf_cls()
     clf.fit(X_train_bal, y_train_bal)
