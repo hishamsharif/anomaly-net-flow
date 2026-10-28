@@ -9,8 +9,8 @@ class BaseClassifier(Protocol):
 
     def fit(self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None) -> None: ...
 
-    def predict(self, X: np.ndarray) -> tuple[str, float]:
-        """Returns (predicted_label, confidence)."""
+    def predict(self, X: np.ndarray) -> list[tuple[str, float]]:
+        """Returns a list of (predicted_label, confidence) — one per row in X."""
         ...
 
     def save(self, path: str) -> None: ...

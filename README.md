@@ -1,7 +1,7 @@
 # AnomalyNetFlow
 
 Incremental network intrusion detection with human-in-the-loop labelling.  
-XGBoost + Vanilla Autoencoder · CIC-IDS2017 · Active learning via analyst feedback.
+XGBoost + MLP Autoencoder · CIC-IDS2017 · Active learning via analyst feedback.
 
 Architecture: [`doc/architecture.md`](doc/architecture.md)
 
@@ -65,7 +65,7 @@ Click it — or from the command line:
 bash ops.sh train initial
 ```
 
-Training reads the CIC-IDS2017 CSVs directly (no import), trains XGBoost + Vanilla AE, and streams live progress via SSE. The Training tab updates with metrics (F1, FAR, AMR) and a confusion matrix when done.
+Training reads the CIC-IDS2017 CSVs directly (no import), trains your selected Classifier + Anomaly Detector, and streams live progress via SSE. The Training tab updates with metrics (F1, PR-AUC, Recall, FAR, AMR) when done.
 
 ---
 
@@ -95,7 +95,7 @@ data/CIC-IDS2017/*.csv          Original dataset — stays as CSV files
         │
         │   DuckDB reads directly at training time
         ▼
-  Initial model trained (XGBoost + Vanilla AE)
+  Initial model trained (Classifier + Anomaly Detector)
         │
   Analyst uploads CSV or PCAP → inference results shown
         │
@@ -113,7 +113,7 @@ data/CIC-IDS2017/*.csv          Original dataset — stays as CSV files
 ## Human-in-the-loop flow
 
 1. **Inference tab** — upload a CSV or PCAP file
-2. The 3-stage pipeline (rule engine → XGBoost → Vanilla AE) predicts a label for each flow
+2. The 3-stage pipeline (rule engine → Classifier → Anomaly Detector) predicts a label for each flow
 3. The analyst reviews flagged flows and submits a verdict:
    - **Confirm** — prediction was correct
    - **Override** — select the correct label
@@ -155,9 +155,8 @@ anomaly-net-flow/
 │   ├── tasks.py                In-process background training (ThreadPoolExecutor + SSE)
 │   ├── ml/
 │   │   ├── registry.py         Add one line here to expose a new model in the UI
-│   │   ├── classifiers/        XGBoostClassifier
-│   │   └── detectors/          MLPAutoencoder
-│   ├── tasks.py                In-process background training (ThreadPoolExecutor + SSE)
+│   │   ├── classifiers/        XGBoostClassifier · RandomForestClassifier
+│   │   └── detectors/          MLPAutoencoder · IsolationForestDetector
 │   └── routers/                predict, training, models, alerts, features
 ├── training/
 │   ├── pipelines/

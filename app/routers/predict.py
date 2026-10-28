@@ -52,7 +52,3 @@ async def predict_batch(
     return {"total": len(df), "message": "Inference pipeline not yet wired — stub"}
 
 
-@router.post("/flow")
-async def predict_flow(features: dict, db: AsyncSession = Depends(get_db)):
-    # TODO: run 3-stage pipeline for a single flow dict
-    raise HTTPException(501, "Not yet implemented")

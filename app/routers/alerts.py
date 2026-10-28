@@ -41,5 +41,14 @@ async def submit_feedback(
 
 @router.get("/metrics")
 async def get_metrics(db: AsyncSession = Depends(get_db)):
-    # TODO: return TP/FP/FN counts, FAR, AMR, F1, verdict_count, K threshold progress
-    raise HTTPException(501, "Not yet implemented")
+    """
+    Verdict count toward the fine-tune threshold.
+    Full TP/FP metrics arrive in the inference pipeline phase.
+    """
+    from sqlalchemy import select, func
+    from app.db.models import Alert
+    result = await db.execute(
+        select(func.count()).select_from(Alert).where(Alert.analyst_verdict.isnot(None))
+    )
+    verdict_count = result.scalar_one() or 0
+    return {"verdict_count": verdict_count}

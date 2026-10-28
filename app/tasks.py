@@ -67,7 +67,8 @@ def _version_dir(clf: str, det: str, vid: int) -> str:
     return f"{clf}_{det}_v{vid}"
 
 
-def _run_initial(run_id: str, classifier_type: str, detector_type: str) -> None:
+def _run_initial(run_id: str, classifier_type: str, detector_type: str,
+                 loop: asyncio.AbstractEventLoop) -> None:
     from app.config import settings
     from app.database import get_sync_db
     from app.db.crud import (
@@ -77,8 +78,6 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str) -> None:
     )
     from app.ml.model_store import model_store
     from training.pipelines.initial import run as pipeline_run
-
-    loop = asyncio.get_event_loop()
 
     def progress(msg: str):
         _put(run_id, "progress", msg, loop)
@@ -148,7 +147,8 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str) -> None:
         _cleanup_later(run_id)
 
 
-def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str) -> None:
+def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
+                   loop: asyncio.AbstractEventLoop) -> None:
     from app.config import settings
     from app.database import get_sync_db
     from app.db.crud import (
@@ -159,8 +159,6 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str) -> Non
     )
     from app.ml.model_store import model_store
     from training.pipelines.fine_tune import run as pipeline_run
-
-    loop = asyncio.get_event_loop()
 
     def progress(msg: str):
         _put(run_id, "progress", msg, loop)
@@ -242,8 +240,13 @@ async def dispatch(mode: str, classifier_type: str, detector_type: str) -> str:
     run_id = str(uuid.uuid4())
     _get_or_create_queue(run_id)  # create queue before thread starts
 
+    # Capture the running loop here (async context) so threads can post events
+    # back to it via call_soon_threadsafe without calling get_event_loop() from
+    # a worker thread (which is deprecated / unreliable in Python 3.10+).
+    loop = asyncio.get_running_loop()
+
     target = _run_initial if mode == "initial" else _run_fine_tune
-    _executor.submit(target, run_id, classifier_type, detector_type)
+    _executor.submit(target, run_id, classifier_type, detector_type, loop)
     return run_id
 
 

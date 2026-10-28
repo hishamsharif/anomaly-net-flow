@@ -2,7 +2,7 @@
 DuckDB-backed loader for the labelled_flows label store.
 
 Training reads go through DuckDB for fast columnar scans.
-DuckDB attaches to the same SQLite/Postgres DB the API writes to.
+DuckDB attaches to the SQLite DB file that the API writes to via aiosqlite.
 """
 from __future__ import annotations
 import duckdb

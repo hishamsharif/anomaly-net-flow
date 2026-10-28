@@ -6,7 +6,6 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./anomaly_net_flow.db"
-    duckdb_path: str = ":memory:"  # in-process; set to a file path for persistence
 
     # Training
     bundled_dataset_dir: str = "data/CIC-IDS2017"
