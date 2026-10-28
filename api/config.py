@@ -4,8 +4,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Database
-    database_url: str = "sqlite+aiosqlite:///./anomaly_net_flow.db"
+    # Database — stored under data/ alongside the dataset for a clean project root
+    database_url: str = "sqlite+aiosqlite:///./data/anomaly_net_flow.db"
 
     # Training
     bundled_dataset_dir: str = "data/CIC-IDS2017"

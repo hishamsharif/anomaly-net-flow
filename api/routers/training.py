@@ -55,7 +55,15 @@ async def training_events(run_id: str):
 
 @router.get("/available-types")
 async def available_types():
+    """
+    Lists the available model types for each pipeline stage.
+    supervised_classifiers  = Stage 2 (trained with attack labels — identifies known categories)
+    anomaly_detectors       = Stage 3 (trained on benign-only — flags novel/zero-day patterns)
+    """
     return {
+        "supervised_classifiers": list(CLASSIFIERS.keys()),
+        "anomaly_detectors": list(ANOMALY_DETECTORS.keys()),
+        # Legacy keys kept for backwards compatibility
         "classifiers": list(CLASSIFIERS.keys()),
         "detectors": list(ANOMALY_DETECTORS.keys()),
     }

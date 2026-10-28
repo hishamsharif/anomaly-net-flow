@@ -21,6 +21,10 @@ const DET_LABELS: Record<string, string> = {
   mlp_ae: 'MLP Autoencoder',
   isolation_forest: 'Isolation Forest',
 }
+
+// Section subtitles explaining the role of each stage
+const CLF_SUBTITLE = 'Supervised — learns from labelled data to name known attack categories (DoS, PortScan, etc.)'
+const DET_SUBTITLE = 'Unsupervised — trained on normal traffic only; flags anything that deviates from the learned baseline (catches zero-days)'
 const label = (map: Record<string, string>, key: string) =>
   map[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
@@ -135,37 +139,43 @@ export default function TrainingPage({ hasModel }: Props) {
 
   // Model selector UI — shared between "no model" and "train new model" flows
   const ModelSelector = () => (
-    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', margin: '12px 0' }}>
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 180 }}>
-        <span style={{ fontSize: 12, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Classifier
-        </span>
+    <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', margin: '12px 0' }}>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)', marginBottom: 2 }}>
+          Stage 2 — Supervised Classifier
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6, lineHeight: 1.4 }}>
+          {CLF_SUBTITLE}
+        </div>
         <select
           value={clf}
           onChange={e => setClf(e.target.value)}
           disabled={training}
-          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}
+          style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}
         >
           {classifiers.map(c => (
             <option key={c} value={c}>{label(CLF_LABELS, c)}</option>
           ))}
         </select>
-      </label>
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 4, flex: 1, minWidth: 180 }}>
-        <span style={{ fontSize: 12, color: 'var(--fg-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-          Anomaly Detector
-        </span>
+      </div>
+      <div style={{ flex: 1, minWidth: 200 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)', marginBottom: 2 }}>
+          Stage 3 — Anomaly Detector
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6, lineHeight: 1.4 }}>
+          {DET_SUBTITLE}
+        </div>
         <select
           value={det}
           onChange={e => setDet(e.target.value)}
           disabled={training}
-          style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}
+          style={{ width: '100%', padding: '6px 10px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--fg)' }}
         >
           {detectors.map(d => (
             <option key={d} value={d}>{label(DET_LABELS, d)}</option>
           ))}
         </select>
-      </label>
+      </div>
     </div>
   )
 
@@ -190,7 +200,7 @@ export default function TrainingPage({ hasModel }: Props) {
             disabled={training}
             onClick={() => startTraining('initial')}
           >
-            {training ? 'Training…' : `Train ${label(CLF_LABELS, clf)} + ${label(DET_LABELS, det)}`}
+            {training ? 'Training…' : `Train ${label(CLF_LABELS, clf)} (classifier) + ${label(DET_LABELS, det)} (detector)`}
           </button>
         </div>
       )}
@@ -253,7 +263,7 @@ export default function TrainingPage({ hasModel }: Props) {
               disabled={training}
               onClick={() => startTraining('initial')}
             >
-              {training ? 'Training…' : `Train ${label(CLF_LABELS, clf)} + ${label(DET_LABELS, det)}`}
+              {training ? 'Training…' : `Train ${label(CLF_LABELS, clf)} (classifier) + ${label(DET_LABELS, det)} (detector)`}
             </button>
           </details>
 

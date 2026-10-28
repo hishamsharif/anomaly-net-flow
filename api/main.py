@@ -8,6 +8,38 @@ from api.database import init_db
 from api.routers import predict, training, models_router, alerts, features
 
 
+def _migrate_db_location_on_startup() -> None:
+    """Move anomaly_net_flow.db from project root → data/ if the old file still exists."""
+    old = "anomaly_net_flow.db"
+    new = os.path.join("data", "anomaly_net_flow.db")
+    if os.path.isfile(old) and not os.path.isfile(new):
+        os.makedirs("data", exist_ok=True)
+        os.rename(old, new)
+        print(f"[startup] Migrated database: {old} → {new}")
+
+
+def _mark_stale_training_on_startup() -> None:
+    """
+    Mark any ModelVersion rows left in 'training' status as 'failed'.
+    These are always orphans — the training thread cannot survive a process restart.
+    """
+    from api.database import get_sync_db
+    from api.db.models import ModelVersion
+    db = get_sync_db()
+    try:
+        stale = db.query(ModelVersion).filter(ModelVersion.status == "training").all()
+        if stale:
+            for mv in stale:
+                mv.status = "failed"
+                mv.metrics_json = {"error": "Training was interrupted by an API restart"}
+            db.commit()
+            print(f"[startup] Marked {len(stale)} orphaned 'training' model(s) as 'failed'")
+    except Exception as exc:
+        print(f"[startup] Warning: could not clean up stale training rows: {exc}")
+    finally:
+        db.close()
+
+
 def _load_active_model_on_startup() -> None:
     """
     Called during lifespan startup.
@@ -48,7 +80,9 @@ def _load_active_model_on_startup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _migrate_db_location_on_startup()
     await init_db()
+    _mark_stale_training_on_startup()
     _load_active_model_on_startup()
     yield
 
