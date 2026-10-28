@@ -15,8 +15,8 @@ models/
 !models/.gitkeep
 
 # Dataset (too large for git)
-data/CIC-IDS2017/*.csv
-data/CIC-IDS2017/*.parquet
+data/CIC-IDS2017/
+CIC-IDS2017.zip
 
 # Logs
 logs/

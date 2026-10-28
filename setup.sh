@@ -93,16 +93,41 @@ mkdir -p models logs
 touch models/.gitkeep logs/.gitkeep
 ok "models/  logs/  ready"
 
-# ── 8. Check for CIC-IDS2017 dataset ──────────────────────────────────────
+# ── 8. Check / download CIC-IDS2017 dataset ───────────────────────────────
 step "Checking CIC-IDS2017 dataset"
 CSV_COUNT=$(find -L data/CIC-IDS2017 -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
 if [ "$CSV_COUNT" -gt 0 ]; then
   ok "Found ${CSV_COUNT} CSV file(s) in data/CIC-IDS2017/"
 else
   warn "No CSV files found in data/CIC-IDS2017/"
-  info "Download the CIC-IDS2017 dataset and place the CSV files there before training."
-  info "Source: https://www.unb.ca/cic/datasets/ids-2017.html"
-  info "(Look for 'MachineLearningCVE' or 'GeneratedLabelledFlows' in the archive)"
+
+  # Read CICIDS2017_GDRIVE_FILE_ID from .env if it exists
+  GDRIVE_FILE_ID=""
+  if [ -f ".env" ]; then
+    GDRIVE_FILE_ID=$(grep -E "^CICIDS2017_GDRIVE_FILE_ID=" .env | cut -d= -f2 | tr -d '[:space:]')
+  fi
+  if [ -z "$GDRIVE_FILE_ID" ] && [ -f ".env.example" ]; then
+    GDRIVE_FILE_ID=$(grep -E "^CICIDS2017_GDRIVE_FILE_ID=" .env.example | cut -d= -f2 | tr -d '[:space:]')
+  fi
+
+  if [ -n "$GDRIVE_FILE_ID" ]; then
+    info "Downloading CIC-IDS2017.zip from Google Drive ..."
+    mkdir -p data/CIC-IDS2017
+    conda run -n "$CONDA_ENV" gdown --id "$GDRIVE_FILE_ID" -O data/CIC-IDS2017.zip
+    info "Extracting ..."
+    unzip -q data/CIC-IDS2017.zip -d data/CIC-IDS2017/
+    rm data/CIC-IDS2017.zip
+    CSV_COUNT=$(find -L data/CIC-IDS2017 -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
+    if [ "$CSV_COUNT" -gt 0 ]; then
+      ok "Downloaded and extracted ${CSV_COUNT} CSV file(s) into data/CIC-IDS2017/"
+    else
+      warn "Download completed but no CSV files found — check the Google Drive file."
+    fi
+  else
+    info "To enable auto-download, set CICIDS2017_GDRIVE_FILE_ID in .env"
+    info "Or place the CSV files manually in data/CIC-IDS2017/ before training."
+    info "Source: https://www.unb.ca/cic/datasets/ids-2017.html"
+  fi
 fi
 
 # ── Done ──────────────────────────────────────────────────────────────────
