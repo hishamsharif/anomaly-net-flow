@@ -82,8 +82,8 @@ step "Environment configuration"
 if [ -f ".env" ]; then
   ok ".env already exists — skipping"
 else
-  cp .env.example .env
-  ok ".env created from .env.example"
+  cp .env.demo .env
+  ok ".env created from .env.demo"
   info "Edit .env to change defaults (thresholds, paths, etc.)"
 fi
 
@@ -106,27 +106,37 @@ else
   if [ -f ".env" ]; then
     GDRIVE_FILE_ID=$(grep -E "^CICIDS2017_GDRIVE_FILE_ID=" .env | cut -d= -f2 | tr -d '[:space:]')
   fi
-  if [ -z "$GDRIVE_FILE_ID" ] && [ -f ".env.example" ]; then
-    GDRIVE_FILE_ID=$(grep -E "^CICIDS2017_GDRIVE_FILE_ID=" .env.example | cut -d= -f2 | tr -d '[:space:]')
+  if [ -z "$GDRIVE_FILE_ID" ] && [ -f ".env.demo" ]; then
+    GDRIVE_FILE_ID=$(grep -E "^CICIDS2017_GDRIVE_FILE_ID=" .env.demo | cut -d= -f2 | tr -d '[:space:]')
   fi
+
+  _dataset_manual_instructions() {
+    warn "Place the 8 CIC-IDS2017 CSV files manually in data/CIC-IDS2017/ before training."
+    info "Source: https://www.unb.ca/cic/datasets/ids-2017.html"
+    info "(Look for 'MachineLearningCVE' or 'GeneratedLabelledFlows' in the archive)"
+  }
 
   if [ -n "$GDRIVE_FILE_ID" ]; then
     info "Downloading CIC-IDS2017.zip from Google Drive ..."
     mkdir -p data/CIC-IDS2017
-    conda run -n "$CONDA_ENV" gdown --id "$GDRIVE_FILE_ID" -O data/CIC-IDS2017.zip
-    info "Extracting ..."
-    unzip -q data/CIC-IDS2017.zip -d data/CIC-IDS2017/
-    rm data/CIC-IDS2017.zip
-    CSV_COUNT=$(find -L data/CIC-IDS2017 -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
-    if [ "$CSV_COUNT" -gt 0 ]; then
-      ok "Downloaded and extracted ${CSV_COUNT} CSV file(s) into data/CIC-IDS2017/"
+    if conda run -n "$CONDA_ENV" gdown --id "$GDRIVE_FILE_ID" -O data/CIC-IDS2017.zip 2>/dev/null; then
+      info "Extracting ..."
+      unzip -q data/CIC-IDS2017.zip -d data/CIC-IDS2017/ 2>/dev/null || true
+      rm -f data/CIC-IDS2017.zip
+      CSV_COUNT=$(find -L data/CIC-IDS2017 -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
+      if [ "$CSV_COUNT" -gt 0 ]; then
+        ok "Downloaded and extracted ${CSV_COUNT} CSV file(s) into data/CIC-IDS2017/"
+      else
+        warn "Download succeeded but no CSV files found — the Google Drive file may have changed."
+        _dataset_manual_instructions
+      fi
     else
-      warn "Download completed but no CSV files found — check the Google Drive file."
+      warn "Google Drive download failed (network issue or link expired)."
+      _dataset_manual_instructions
     fi
   else
-    info "To enable auto-download, set CICIDS2017_GDRIVE_FILE_ID in .env"
-    info "Or place the CSV files manually in data/CIC-IDS2017/ before training."
-    info "Source: https://www.unb.ca/cic/datasets/ids-2017.html"
+    info "To enable auto-download, set CICIDS2017_GDRIVE_FILE_ID in .env.demo"
+    _dataset_manual_instructions
   fi
 fi
 

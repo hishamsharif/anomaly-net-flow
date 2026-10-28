@@ -8,7 +8,7 @@ from __future__ import annotations
 import duckdb
 import pandas as pd
 
-from app.config import settings
+from api.config import settings
 
 
 def _conn() -> duckdb.DuckDBPyConnection:

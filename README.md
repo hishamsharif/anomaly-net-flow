@@ -1,21 +1,19 @@
 # AnomalyNetFlow
 
 Incremental network intrusion detection with human-in-the-loop labelling.  
-XGBoost + MLP Autoencoder · CIC-IDS2017 · Active learning via analyst feedback.
+XGBoost · Random Forest · MLP Autoencoder · Isolation Forest · CIC-IDS2017
 
-Architecture: [`doc/architecture.md`](doc/architecture.md)
+Architecture: [`docs/architecture.md`](docs/architecture.md)
 
 ---
 
 ## Prerequisites
 
-Before running anything, you need **three things only**:
-
 | # | What | Where to get it |
 |---|---|---|
 | 1 | **Miniconda** (or Anaconda) | https://docs.conda.io/en/latest/miniconda.html |
 | 2 | **Node.js ≥ 20** | https://nodejs.org |
-| 3 | **CIC-IDS2017 CSV files** placed in `data/CIC-IDS2017/` | https://www.unb.ca/cic/datasets/ids-2017.html |
+| 3 | **CIC-IDS2017 CSV files** in `data/CIC-IDS2017/` | https://www.unb.ca/cic/datasets/ids-2017.html |
 
 No Redis. No Docker. No database server.  
 SQLite is file-based and created automatically on first run.
@@ -24,120 +22,140 @@ SQLite is file-based and created automatically on first run.
 
 ## Quick start
 
-### Step 1 — Run setup (once)
+### 1 — Run setup (once)
 
 ```bash
 bash setup.sh
 ```
 
-This will:
-- Create a conda environment (`dl_env`, Python 3.11)
-- Install all Python dependencies (`requirements.txt`)
-- Install UI dependencies (`npm install`)
-- Create `.env` from `.env.example`
-- Check for the CIC-IDS2017 dataset and warn if missing
+Creates the `dl_env` conda environment, installs Python + UI dependencies, copies `.env.demo` → `.env`, and checks for the dataset.
 
-### Step 2 — Start the API
+### 2 — Start the API
 
 ```bash
 bash ops.sh start
 ```
 
-API available at **http://localhost:8000** · Docs at **http://localhost:8000/docs**
+API: **http://localhost:8000** · Swagger docs: **http://localhost:8000/docs**
 
-### Step 3 — Start the UI *(separate terminal)*
+### 3 — Start the UI *(separate terminal)*
 
 ```bash
 bash ops.sh ui
 ```
 
-UI available at **http://localhost:5173**
+UI: **http://localhost:5173**
 
 ---
 
 ## First run: initial training
 
-The **Train & Evaluate** tab shows a *"Train on CIC-IDS2017"* button because no model is active yet.
-
-Click it — or from the command line:
+Open the **Train & Evaluate** tab — a *"Train on CIC-IDS2017"* button appears because no model is active yet. Select your classifier and detector, then click it, or trigger from the terminal:
 
 ```bash
 bash ops.sh train initial
 ```
 
-Training reads the CIC-IDS2017 CSVs directly (no import), trains your selected Classifier + Anomaly Detector, and streams live progress via SSE. The Training tab updates with metrics (F1, PR-AUC, Recall, FAR, AMR) when done.
+Training reads the CIC-IDS2017 CSVs directly (no import step), runs feature engineering, trains the selected Classifier + Anomaly Detector, and streams live progress via SSE to the Training tab.
+
+**Available models (selectable in the UI):**
+
+| Role | Options |
+|---|---|
+| Classifier | `xgboost` (default), `random_forest` |
+| Anomaly Detector | `mlp_ae` (default), `isolation_forest` |
 
 ---
 
 ## Operations reference
 
 ```
-bash setup.sh              First-time setup (run once)
+bash setup.sh                  First-time setup (run once)
 
-bash ops.sh start          Start the API
-bash ops.sh stop           Stop the API
-bash ops.sh restart        Restart the API
-bash ops.sh status         Show running status + health check
-bash ops.sh logs           Tail the API log  (Ctrl-C to exit)
-bash ops.sh ui             Start the React UI  (port 5173)
-bash ops.sh train          Trigger initial training
-bash ops.sh train fine_tune  Trigger incremental fine-tune
-bash ops.sh open           Open the UI in your browser
-bash ops.sh help           Show all commands
+bash ops.sh start              Start the API
+bash ops.sh stop               Stop the API
+bash ops.sh restart            Restart the API
+bash ops.sh status             Show running status + health check
+bash ops.sh logs               Tail the API log  (Ctrl-C to exit)
+bash ops.sh ui                 Start the React UI  (port 5173)
+bash ops.sh train              Trigger initial training
+bash ops.sh train fine_tune    Trigger incremental fine-tune
+bash ops.sh verify             Check setup is complete
+bash ops.sh open               Open the UI in your browser
+bash ops.sh help               Show all commands
 ```
 
 ---
 
-## How the data works
+## How it works
 
 ```
-data/CIC-IDS2017/*.csv          Original dataset — stays as CSV files
-        │
-        │   DuckDB reads directly at training time
-        ▼
+data/CIC-IDS2017/*.csv         Original dataset — stays as CSV, no import
+         │
+         │   DuckDB reads directly at training time
+         ▼
   Initial model trained (Classifier + Anomaly Detector)
-        │
-  Analyst uploads CSV or PCAP → inference results shown
-        │
-  Analyst confirms or corrects labels → written to SQLite
-        │
-  anomaly_net_flow.db             SQLite (analyst verdicts only)
-        │
-        │   DuckDB reads at fine-tune time
-        ▼
-  Incremental fine-tune (unlocks after 50 analyst verdicts)
+         │
+  Analyst uploads CSV or PCAP → 3-stage inference pipeline
+  (Rule engine → Classifier → MLP Autoencoder)
+         │
+  Predicted label + anomaly score per flow, displayed in UI
+         │
+  Analyst confirms or corrects labels → SQLite
+         │
+  anomaly_net_flow.db          SQLite (analyst verdicts only)
+         │
+         │   Unlocks after 50 verdicts (configurable)
+         ▼
+  Incremental fine-tune → improved model version
 ```
 
 ---
 
-## Human-in-the-loop flow
+## 3-Stage Inference Pipeline
 
-1. **Inference tab** — upload a CSV or PCAP file
-2. The 3-stage pipeline (rule engine → Classifier → Anomaly Detector) predicts a label for each flow
-3. The analyst reviews flagged flows and submits a verdict:
+| Stage | Component | What it does |
+|---|---|---|
+| 1 | **Rule Engine** | Fast deterministic rules — flags obviously benign traffic and exits early |
+| 2 | **Classifier** | XGBoost or Random Forest — predicts one of 15 attack classes or BENIGN |
+| 3 | **Anomaly Detector** | MLP Autoencoder or Isolation Forest — catches novel/zero-day traffic the classifier hasn't seen |
+
+Every alert includes an explainability signal:
+- Classifier → SHAP per-feature contribution
+- MLP Autoencoder → per-feature reconstruction error `(x − x̂)²` (no SHAP needed)
+
+---
+
+## Human-in-the-loop feedback
+
+1. Upload CSV or PCAP in the **Inference** tab
+2. Review flagged flows — each shows predicted label and anomaly score
+3. Submit a verdict:
    - **Confirm** — prediction was correct
    - **Override** — select the correct label
-4. Both verdict types are stored and count toward the fine-tune threshold (default: 50)
-5. When the threshold is reached, the **Fine-tune** button unlocks on the Training tab
+4. Both verdict types are stored in the label store
+5. After 50 verdicts, **Fine-tune** unlocks on the Training tab
 
 ---
 
 ## API endpoints
 
-Base URL: `http://localhost:8000` · Full docs: `http://localhost:8000/docs`
+Base URL: `http://localhost:8000` · Full interactive docs: `http://localhost:8000/docs`
 
-| Method | Path | Description |
-|---|---|---|
-| GET | `/health` | Health check |
-| GET | `/api/models/active` | Active model or null |
-| GET | `/api/models/` | All model versions + metrics |
-| POST | `/api/training/start` | Start training — returns `run_id` |
-| GET | `/api/training/events/{run_id}` | SSE stream of live progress |
-| GET | `/api/training/available-types` | Available classifier + detector types |
-| POST | `/api/predict/batch` | Upload CSV or PCAP for batch inference |
-| GET | `/api/alerts/` | Inference alerts (paginated) |
-| POST | `/api/alerts/{id}/feedback` | Submit analyst verdict |
-| GET | `/api/alerts/metrics` | Live F1 / FAR / AMR + verdict count |
+| Method | Path | Description | Requires trained model? |
+|---|---|---|---|
+| GET | `/health` | Health check | No |
+| GET | `/api/models/active` | Active model or `null` | No |
+| GET | `/api/models/` | All model versions + metrics | No |
+| POST | `/api/models/{id}/promote` | Promote a version to active | No |
+| POST | `/api/training/start` | Start training — returns `run_id` | No |
+| GET | `/api/training/events/{run_id}` | SSE stream of live training progress | No |
+| GET | `/api/training/available-types` | Classifier + detector options | No |
+| GET | `/api/features/` | Feature list from the active model | Yes |
+| POST | `/api/predict/batch` | Upload CSV or PCAP for batch inference | Yes |
+| GET | `/api/alerts/` | Inference alerts (paginated) | Yes |
+| POST | `/api/alerts/{id}/feedback` | Submit analyst verdict | Yes |
+| GET | `/api/alerts/metrics` | Verdict count toward fine-tune threshold | Yes |
 
 ---
 
@@ -145,63 +163,72 @@ Base URL: `http://localhost:8000` · Full docs: `http://localhost:8000/docs`
 
 ```
 anomaly-net-flow/
-├── setup.sh                    First-time setup
-├── ops.sh                      All runtime operations
-├── app/                        FastAPI backend
-│   ├── main.py
-│   ├── config.py               Settings (.env / environment variables)
-│   ├── database.py             SQLAlchemy async (SQLite) + DuckDB helper
-│   ├── db/models.py            ORM models (labelled_flows, alerts, model_versions …)
-│   ├── tasks.py                In-process background training (ThreadPoolExecutor + SSE)
-│   ├── ml/
-│   │   ├── registry.py         Add one line here to expose a new model in the UI
-│   │   ├── classifiers/        XGBoostClassifier · RandomForestClassifier
-│   │   └── detectors/          MLPAutoencoder · IsolationForestDetector
-│   └── routers/                predict, training, models, alerts, features
-├── training/
+├── setup.sh                      First-time setup
+├── ops.sh                        All runtime operations
+├── api/                          FastAPI HTTP layer (no ML logic)
+│   ├── main.py                   Entry point: uvicorn api.main:app
+│   ├── config.py                 Settings (.env / environment variables)
+│   ├── database.py               SQLAlchemy async (SQLite) + DuckDB helper
+│   ├── tasks.py                  In-process background training (ThreadPoolExecutor + SSE)
+│   ├── db/
+│   │   ├── models.py             ORM: labelled_flows, alerts, model_versions, …
+│   │   └── crud.py               Sync DB helpers for background training threads
+│   └── routers/                  predict, training, models, alerts, features
+├── core/                         Shared model classes — zero HTTP dependency
+│   ├── base.py                   PreprocessingSpec · BaseClassifier · BaseAnomalyDetector
+│   ├── registry.py               Add one line here to expose a new model in the UI
+│   ├── store.py                  ModelStore singleton (dual clf_scaler / det_scaler)
+│   ├── classifiers/              xgboost_clf.py · random_forest_clf.py
+│   └── detectors/                mlp_ae.py · isolation_forest.py
+├── training/                     Batch training processes
 │   ├── pipelines/
-│   │   ├── initial.py          CIC-IDS2017 CSVs → XGBoost + AE
-│   │   └── fine_tune.py        Analyst verdicts from SQLite → incremental update
-│   ├── adapters/
-│   │   ├── csv_inference.py    CSV upload → feature DataFrame
-│   │   └── pcap_adapter.py     PCAP upload → flow extraction
-│   └── data_loader.py          DuckDB queries (CSV + SQLite)
-├── ui/                         React 18 + TypeScript + Vite 5
-│   └── src/pages/              AboutPage · TrainingPage · InferencePage
-├── data/CIC-IDS2017/           Place dataset CSV files here (not in git)
-├── models/                     Saved model artefacts  (created at runtime)
-├── doc/architecture.md         Full system architecture
+│   │   ├── initial.py            CIC-IDS2017 CSVs → Classifier + Detector
+│   │   └── fine_tune.py          Analyst verdicts from SQLite → incremental update
+│   ├── feature_eng/
+│   │   └── pipeline.py           FeatureEngineeringPipeline (VT → corr → MI → scaler)
+│   └── data_loader.py            DuckDB queries (CSV + SQLite)
+├── inference/                    Runtime inference adapters
+│   └── adapters/
+│       ├── csv_adapter.py        CSV upload → feature DataFrame
+│       └── pcap_adapter.py       PCAP upload → NFStream flow extraction
+├── ui/                           React 18 + TypeScript + Vite 5
+│   └── src/pages/                AboutPage · TrainingPage · InferencePage
+├── data/CIC-IDS2017/             Place dataset CSV files here (.gitignored)
+├── models/                       Saved model artefacts  (created at runtime, .gitignored)
+├── docs/architecture.md          Full system architecture and design decisions
 ├── requirements.txt
-└── .env.example
+└── .env.demo                     Copy to .env to override defaults
 ```
 
 ---
 
 ## Configuration
 
-All settings have working defaults — no configuration needed for a local run.  
-To override, copy `.env.example` to `.env` and edit:
+All settings have working defaults — no configuration needed for a local run.
 
 ```bash
-cp .env.example .env
+cp .env.demo .env   # then edit as needed
 ```
-
-Key settings:
 
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `sqlite+aiosqlite:///./anomaly_net_flow.db` | SQLite database path |
 | `BUNDLED_DATASET_DIR` | `data/CIC-IDS2017` | CIC-IDS2017 CSV folder |
 | `FINE_TUNE_K_THRESHOLD` | `50` | Analyst verdicts needed to unlock fine-tune |
-| `AE_REPLAY_BUFFER_FRACTION` | `0.1` | Fraction of old data replayed during AE fine-tune |
+| `AE_REPLAY_BUFFER_FRACTION` | `0.1` | Old benign data replayed during AE fine-tune (prevents forgetting) |
+| `AE_ANOMALY_THRESHOLD_PERCENTILE` | `95` | p-value for anomaly threshold (p90=more alerts, p99=fewer) |
+| `MAX_UPLOAD_MB` | `200` | Max inference file upload size |
 
 ---
 
 ## Extending with a new model
 
-1. Create `app/learning/classifiers/my_model.py` implementing `BaseClassifier` (`app/learning/base.py`)
-2. Add one line to `app/learning/registry.py`:
+1. Create `core/classifiers/my_model.py` implementing `BaseClassifier` (see `core/base.py`)
+   - Declare `preprocessing = PreprocessingSpec(needs_scaling=..., preferred_scalers=(...))` as a class variable
+2. Add one line to `core/registry.py`:
    ```python
    CLASSIFIERS["my_model"] = MyModelClassifier
    ```
-3. The model appears automatically in the Training tab and `GET /api/training/available-types`
+3. The model appears automatically in the Training tab dropdown and `GET /api/training/available-types`
+
+The same pattern applies to anomaly detectors via `ANOMALY_DETECTORS` and `core/detectors/`.

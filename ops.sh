@@ -44,7 +44,11 @@ _is_running() { [ -f "$1" ] && kill -0 "$(cat "$1")" 2>/dev/null; }
 
 _free_port() {
   local pid; pid=$(lsof -ti :"$1" 2>/dev/null || true)
-  [ -n "$pid" ] && { warn "Port $1 in use — stopping old process (PID $pid)"; kill "$pid" 2>/dev/null || true; sleep 1; }
+  if [ -n "$pid" ]; then
+    warn "Port $1 in use — stopping old process (PID $pid)"
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+  fi
 }
 
 _verify_setup() {
@@ -69,8 +73,8 @@ _verify_setup() {
   fi
 
   # .env
-  if [ ! -f "$SCRIPT_DIR/.env" ] && [ ! -f "$SCRIPT_DIR/.env.example" ]; then
-    warn ".env.example missing — repository may be incomplete"
+  if [ ! -f "$SCRIPT_DIR/.env" ] && [ ! -f "$SCRIPT_DIR/.env.demo" ]; then
+    warn ".env.demo missing — repository may be incomplete"
     issues=$((issues + 1))
   fi
 
@@ -103,17 +107,26 @@ _open_url() {
 # ── Commands ──────────────────────────────────────────────────────────────────
 cmd_start() {
   _verify_setup
-  if _is_running "$API_PID"; then
-    ok "API already running (PID $(cat "$API_PID")) — http://localhost:${API_PORT}"
+  # Check if the port is already alive (API may be running under a different PID wrapper)
+  if curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
+    ok "API already running  →  http://localhost:${API_PORT}"
     return
   fi
   _free_port "$API_PORT"
   info "Starting API on port ${API_PORT} ..."
+  # conda run acts as a wrapper — save its PID for stop/restart, but health-check the port
   PYTHONPATH="$SCRIPT_DIR" conda run -n "$CONDA_ENV" \
-    uvicorn app.main:app --host 0.0.0.0 --port "$API_PORT" >> "$API_LOG" 2>&1 &
+    uvicorn api.main:app --host 0.0.0.0 --port "$API_PORT" >> "$API_LOG" 2>&1 &
   echo $! > "$API_PID"
-  sleep 4
-  if _is_running "$API_PID"; then
+  # Poll the health endpoint for up to 15 s before declaring failure
+  local up=0
+  for _ in 1 2 3 4 5; do
+    sleep 3
+    if curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
+      up=1; break
+    fi
+  done
+  if [ "$up" -eq 1 ]; then
     sep
     ok "API running  →  http://localhost:${API_PORT}/docs"
     ok "Log file     →  $API_LOG"

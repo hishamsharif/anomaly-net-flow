@@ -11,8 +11,8 @@ export default function AboutPage() {
       <h2>How it works</h2>
       <div className="card">
         <p><strong>1. Initial Training</strong> — Go to the <em>Train &amp; Evaluate</em> tab
-        and click <em>Train on CIC-IDS2017</em>. The system trains an XGBoost classifier and
-        a Vanilla Autoencoder on the bundled dataset.</p>
+        and click <em>Train on CIC-IDS2017</em>. The system trains a Classifier and
+        an MLP Autoencoder on the bundled dataset (model types selectable).</p>
         <p><strong>2. Inference</strong> — Go to the <em>Inference</em> tab and upload a CSV
         (CIC-IDS2017 format) or PCAP file. Each flow gets a predicted label and an anomaly
         score through a 3-stage pipeline: rule engine → XGBoost → Autoencoder.</p>
@@ -34,8 +34,9 @@ export default function AboutPage() {
           attack classes. Returns predicted label and confidence score.
         </p>
         <p>
-          <strong>Stage 3 — Vanilla Autoencoder:</strong> Anomaly detector trained on benign flows.
-          Returns a reconstruction error score; flows above the p95 threshold are flagged as anomalies.
+          <strong>Stage 3 — MLP Autoencoder:</strong> Anomaly detector trained on benign flows only
+          (self-supervised). Returns a per-flow reconstruction error (MSE); flows above the p95
+          threshold are flagged as anomalies. Per-feature error (x − x̂)² gives free explainability.
         </p>
       </div>
 
@@ -46,14 +47,14 @@ export default function AboutPage() {
           Fine-tune = full cumulative retrain (trees are additive, not weight-based).
         </p>
         <p>
-          <strong>Anomaly Detector (v1):</strong> Vanilla Autoencoder (MLP, MSE loss) — simple
-          and debuggable. Fine-tune = load previous weights → freeze encoder → train on new data
-          + 10% replay buffer.
+          <strong>Anomaly Detector (v1):</strong> MLP Autoencoder (fully-connected encoder-decoder,
+          MSE loss). Fine-tune = load previous weights → freeze encoder → train on new data
+          + 10% replay buffer (prevents catastrophic forgetting).
         </p>
         <p>
           <strong>Upgrade path:</strong> FT-Transformer (true weight-based fine-tuning),
           Transformer-AE (self-attention over feature tokens — correct inductive bias for tabular data).
-          Add one line to <code>app/learning/registry.py</code> to expose a new model in this UI.
+          Add one line to <code>core/registry.py</code> to expose a new model in this UI.
         </p>
       </div>
 
@@ -71,7 +72,7 @@ export default function AboutPage() {
       <div className="card">
         <p>
           FastAPI · SQLAlchemy async · SQLite · DuckDB · React 18 + TypeScript + Vite.
-          See <code>doc/architecture.md</code> in the project root for the full design document.
+          See <code>docs/architecture.md</code> in the project root for the full design document.
         </p>
       </div>
     </div>

@@ -1,23 +1,28 @@
 """
 Initial training pipeline — runs once when no active model exists.
 
-Reads bundled CIC-IDS2017 CSV via DuckDB, trains XGBoost + Vanilla AE,
-saves versioned artefacts, returns metrics.
+Reads bundled CIC-IDS2017 CSV, trains a selected classifier + anomaly
+detector, saves versioned artefacts, returns metrics.
+
+Feature engineering (stages 1-3 shared; stage 4 per-model-path):
+  1. VarianceThreshold   — drop near-constant features
+  2. Correlation pruning — drop one from each highly-correlated pair
+  3. SelectKBest (MI)    — optional: keep top-K by mutual information
+  4a. clf_scaler         — determined by classifier PreprocessingSpec
+  4b. det_scaler         — determined by detector PreprocessingSpec
 """
 from __future__ import annotations
 import json
 import os
 from typing import Callable
 
-import joblib
 import numpy as np
 import pandas as pd
 from imblearn.over_sampling import SMOTE
-from sklearn.feature_selection import VarianceThreshold
 from sklearn.metrics import classification_report, confusion_matrix
-from sklearn.preprocessing import RobustScaler
 
 from training.data_loader import load_initial
+from training.feature_eng.pipeline import FeatureEngineeringPipeline
 
 _META_COLS = {"Label", "Flow ID", "Timestamp", "Source IP", "Destination IP"}
 
@@ -37,14 +42,17 @@ def run(
         if on_progress:
             on_progress(msg)
 
-    # ── 1. Load dataset ───────────────────────────────────────────────────
-    progress("Loading CIC-IDS2017 CSV files …")
+    from api.config import settings as cfg
+    from core.registry import get_classifier, get_detector
+
+    # 1. Load dataset
+    progress("Loading CIC-IDS2017 CSV files ...")
     df = load_initial(bundled_dir)
     label_col = next((c for c in df.columns if c.strip() == "Label"), None)
     if label_col is None:
         raise ValueError("CIC-IDS2017 CSV must contain a 'Label' column.")
 
-    # ── 2. Sort by Timestamp for day-based ordering ───────────────────────
+    # 2. Sort by Timestamp for day-based ordering
     ts_col = next((c for c in df.columns if c.strip() == "Timestamp"), None)
     if ts_col:
         df = df.sort_values(ts_col)
@@ -58,120 +66,142 @@ def run(
         .replace([np.inf, -np.inf], 0)
     )
 
-    # ── 3. Time-ordered 80/10/10 split (Mon-Thu train / Fri val / Fri-pm test)
-    progress(f"Splitting {len(X_raw):,} rows (80% train / 10% val / 10% test) …")
+    # 3. Time-ordered 80/10/10 split
+    progress(f"Splitting {len(X_raw):,} rows (80% train / 10% val / 10% test) ...")
     n = len(X_raw)
     train_end, val_end = int(n * 0.8), int(n * 0.9)
 
-    X_train_raw, y_train = X_raw.iloc[:train_end].values, labels.iloc[:train_end].values
-    X_val_raw, y_val = X_raw.iloc[train_end:val_end].values, labels.iloc[train_end:val_end].values
-    X_test_raw, y_test = X_raw.iloc[val_end:].values, labels.iloc[val_end:].values
+    X_train_raw = X_raw.iloc[:train_end].values
+    y_train     = labels.iloc[:train_end].values
+    X_val_raw   = X_raw.iloc[train_end:val_end].values
+    y_val       = labels.iloc[train_end:val_end].values
+    X_test_raw  = X_raw.iloc[val_end:].values
+    y_test      = labels.iloc[val_end:].values
 
-    # ── 4. Variance threshold + RobustScaler (fit on train only) ─────────
-    progress("Fitting preprocessing (VarianceThreshold + RobustScaler) …")
-    vt = VarianceThreshold()
-    X_train = vt.fit_transform(X_train_raw)
-    X_val = vt.transform(X_val_raw)
-    X_test = vt.transform(X_test_raw)
+    # 4. Feature engineering stages 1-3 (shared across all paths)
+    fe = FeatureEngineeringPipeline(
+        variance_threshold=cfg.variance_threshold,
+        correlation_threshold=cfg.correlation_threshold,
+        feature_selection_k=cfg.feature_selection_k,
+    )
+    fe_result = fe.fit_transform(
+        X_train_raw, X_val_raw, X_test_raw,
+        y_train, list(X_raw.columns),
+        on_progress=progress,
+    )
 
-    scaler = RobustScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_val = scaler.transform(X_val)
-    X_test = scaler.transform(X_test)
-
-    # ── 5. SMOTE on train split only ──────────────────────────────────────
-    progress("Applying SMOTE to training split …")
-    smote = SMOTE(random_state=42)
-    X_train_bal, y_train_bal = smote.fit_resample(X_train, y_train)
-
-    # ── 6. Train classifier ───────────────────────────────────────────────
-    progress(f"Training {classifier_type} classifier …")
-    from app.learning.registry import get_classifier, get_detector
+    # 5. Stage 4: path-specific scalers driven by PreprocessingSpec
     clf_cls = get_classifier(classifier_type)
-    clf = clf_cls()
-    clf.fit(X_train_bal, y_train_bal)
+    det_cls = get_detector(detector_type)
 
-    # ── 7. Evaluate classifier on test set ───────────────────────────────
-    progress("Evaluating classifier on test split …")
-    raw_pred = clf.predict(X_test)
-    if raw_pred and isinstance(raw_pred[0], tuple):   # returns (label, confidence) tuples
-        y_pred = [p[0] for p in raw_pred]
-        # Attack confidence score: confidence if predicted attack, else 1-confidence
-        y_scores = np.array([
-            p[1] if p[0] != "BENIGN" else 1.0 - p[1]
-            for p in raw_pred
-        ])
+    clf_scaler_type = (
+        "none" if not clf_cls.preprocessing.needs_scaling
+        else cfg.scaler_type
+    )
+    det_scaler_type = (
+        "none" if not det_cls.preprocessing.needs_scaling
+        else cfg.scaler_type
+    )
+    progress(f"Scaler -- classifier: {clf_scaler_type}  detector: {det_scaler_type}")
+
+    os.makedirs(artefact_dir, exist_ok=True)
+
+    X_clf_tr, X_clf_v, X_clf_te = FeatureEngineeringPipeline.apply_scaler(
+        fe_result, clf_scaler_type, artefact_dir, "clf_scaler.joblib")
+    X_det_tr, X_det_v, X_det_te = FeatureEngineeringPipeline.apply_scaler(
+        fe_result, det_scaler_type, artefact_dir, "det_scaler.joblib")
+
+    # 6. SMOTE on classifier train split
+    progress("Applying SMOTE to training split ...")
+    smote = SMOTE(random_state=42)
+    X_clf_bal, y_clf_bal = smote.fit_resample(X_clf_tr, y_train)
+
+    # 7. Train classifier
+    progress(f"Training {classifier_type} classifier ...")
+    clf = clf_cls()
+    clf.fit(X_clf_bal, y_clf_bal)
+
+    # 8. Evaluate classifier on test set
+    progress("Evaluating classifier on test split ...")
+    raw_pred = clf.predict(X_clf_te)
+    if raw_pred and isinstance(raw_pred[0], tuple):
+        y_pred   = [p[0] for p in raw_pred]
+        y_scores = np.array([p[1] if p[0] != "BENIGN" else 1.0 - p[1] for p in raw_pred])
     else:
-        y_pred = list(raw_pred)
+        y_pred   = list(raw_pred)
         y_scores = None
     metrics = _compute_metrics(y_test, y_pred, y_scores)
     progress(f"Test  F1={metrics['f1']:.4f}  FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}")
 
-    # ── 8. Train anomaly detector on benign train flows only ──────────────
-    progress(f"Training {detector_type} anomaly detector on benign flows …")
-    X_benign_train = X_train[y_train == "BENIGN"]
-    det_cls = get_detector(detector_type)
-    det = det_cls()
+    # 9. Train anomaly detector on benign flows only
+    progress(f"Training {detector_type} anomaly detector on benign flows ...")
+    X_benign_train = X_det_tr[y_train == "BENIGN"]
+    if detector_type == "mlp_ae":
+        det = det_cls(
+            anomaly_threshold_percentile=getattr(cfg, "ae_anomaly_threshold_percentile", 95.0),
+            freeze_epochs=getattr(cfg, "ae_freeze_epochs", 5),
+        )
+    else:
+        det = det_cls()
     det.fit(X_benign_train)
 
-    # ── 9. Save artefacts ─────────────────────────────────────────────────
-    progress("Saving model artefacts …")
-    os.makedirs(artefact_dir, exist_ok=True)
-    clf_path = os.path.join(artefact_dir, "classifier.joblib")
-    det_path = os.path.join(artefact_dir, "detector.joblib")
-    scaler_path = os.path.join(artefact_dir, "scaler.joblib")
-    vt_path = os.path.join(artefact_dir, "variance_threshold.joblib")
-    meta_path = os.path.join(artefact_dir, "metadata.json")
+    # 10. Log top-20 feature importances
+    importances = clf.feature_importances() if hasattr(clf, "feature_importances") else None
+    sel_names = fe_result.feature_names_selected
+    if importances is not None and len(importances) == len(sel_names):
+        top_idx = np.argsort(importances)[::-1][:20]
+        progress("Top-20 features by importance:")
+        for rank, idx in enumerate(top_idx, 1):
+            progress(f"  {rank:2d}. {sel_names[idx]:<45s}  {importances[idx]:.4f}")
 
-    clf.save(clf_path)
-    det.save(det_path)
-    joblib.dump(scaler, scaler_path)
-    joblib.dump(vt, vt_path)
+    # 11. Save artefacts
+    progress("Saving model artefacts ...")
+    clf.save(os.path.join(artefact_dir, "classifier.joblib"))
+    det.save(os.path.join(artefact_dir, "detector.joblib"))
+    FeatureEngineeringPipeline.save_artefacts(fe_result, artefact_dir)
 
     metadata = {
-        "feature_names": list(X_raw.columns),
-        "classes": list(clf.classes_) if hasattr(clf, "classes_") else [],
-        "ae_threshold": float(det.threshold) if hasattr(det, "threshold") else None,
-        "train_rows": int(len(X_train_bal)),
-        "val_rows": int(len(X_val)),
-        "test_rows": int(len(X_test)),
+        "feature_names":          list(X_raw.columns),
+        "selected_feature_names": sel_names,
+        "n_features_initial":     fe_result.n_initial,
+        "n_features_final":       fe_result.n_final,
+        "classes":                list(clf.classes_) if hasattr(clf, "classes_") else [],
+        "ae_threshold":           float(det.threshold) if hasattr(det, "threshold") else None,
+        "train_rows":             int(len(X_clf_bal)),
+        "val_rows":               int(len(X_clf_v)),
+        "test_rows":              int(len(X_clf_te)),
+        "clf_scaler_type":        clf_scaler_type,
+        "det_scaler_type":        det_scaler_type,
+        "variance_threshold":     cfg.variance_threshold,
+        "correlation_threshold":  cfg.correlation_threshold,
+        "feature_selection_k":    cfg.feature_selection_k,
     }
-    with open(meta_path, "w") as f:
+    with open(os.path.join(artefact_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)
 
-    return {
-        **metrics,
-        **metadata,
-        "artefact_dir": artefact_dir,
-    }
+    return {**metrics, **metadata, "artefact_dir": artefact_dir}
 
 
 def _compute_metrics(y_true, y_pred, y_scores: np.ndarray | None = None) -> dict:
     """
     Compute F1 (macro), FAR, AMR, Recall, and PR-AUC for binary BENIGN vs ATTACK framing.
-
-    y_scores: optional 1-D array of attack confidence scores for PR-AUC.
-              If None, PR-AUC is approximated from binary predictions (less precise).
-    PR-AUC is the preferred summary metric for imbalanced IDS data — it focuses on
-    the minority (attack) class and is not inflated by the dominant benign majority.
+    PR-AUC is preferred for imbalanced IDS data -- less inflated by the benign majority.
     """
     from sklearn.metrics import average_precision_score
 
     report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
     f1_macro = report.get("macro avg", {}).get("f1-score", 0.0)
 
-    # Binary framing: BENIGN = negative (0), everything else = positive / attack (1)
     y_bin_true = np.array([0 if v == "BENIGN" else 1 for v in y_true])
     y_bin_pred = np.array([0 if v == "BENIGN" else 1 for v in y_pred])
 
     cm = confusion_matrix(y_bin_true, y_bin_pred, labels=[0, 1])
     tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
 
-    far    = fp / (fp + tn) if (fp + tn) > 0 else 0.0   # false alarm rate
-    amr    = fn / (fn + tp) if (fn + tp) > 0 else 0.0   # attack miss rate
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0   # detection rate
+    far    = fp / (fp + tn) if (fp + tn) > 0 else 0.0
+    amr    = fn / (fn + tp) if (fn + tp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
 
-    # PR-AUC: use attack confidence scores if provided, otherwise binary predictions
     scores_for_pr = y_scores if y_scores is not None else y_bin_pred.astype(float)
     try:
         pr_auc = float(average_precision_score(y_bin_true, scores_for_pr))

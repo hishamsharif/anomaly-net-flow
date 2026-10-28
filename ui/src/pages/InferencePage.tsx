@@ -67,7 +67,7 @@ export default function InferencePage({ hasModel }: Props) {
       const resp = await fetch(`/api/alerts/${alertId}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verdict: fb.verdict, label: fb.label }),
+        body: JSON.stringify({ verdict: fb.verdict, correct_label: fb.label }),
       })
       if (!resp.ok) throw new Error('Failed to submit feedback')
       setSubmitted(s => new Set([...s, alertId]))
