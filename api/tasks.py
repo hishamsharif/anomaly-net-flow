@@ -22,6 +22,10 @@ _executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="training")
 _queues: dict[str, asyncio.Queue] = {}
 _qlock = threading.Lock()
 
+# run_id → {"pct": int, "mode": str, "started_at": float}
+_step_state: dict[str, dict] = {}
+_slock = threading.Lock()
+
 
 # ── Queue helpers ─────────────────────────────────────────────────────────────
 
@@ -35,13 +39,19 @@ def _get_or_create_queue(run_id: str) -> asyncio.Queue:
 def _put(run_id: str, event: str, data: Any, loop: asyncio.AbstractEventLoop) -> None:
     q = _get_or_create_queue(run_id)
     loop.call_soon_threadsafe(q.put_nowait, {"event": event, "data": str(data)})
+    if event == "step":
+        with _slock:
+            if run_id in _step_state:
+                _step_state[run_id]["pct"] = int(data)
 
 
-def _cleanup_later(run_id: str, delay: float = 120.0) -> None:
+def _cleanup_later(run_id: str, delay: float = 600.0) -> None:
     def _rm():
         time.sleep(delay)
         with _qlock:
             _queues.pop(run_id, None)
+        with _slock:
+            _step_state.pop(run_id, None)
     threading.Thread(target=_rm, daemon=True).start()
 
 
@@ -99,7 +109,7 @@ def _make_step_emitter(steps: list[tuple[str, int]], run_id: str, loop: asyncio.
         for keyword, pct in steps:
             if keyword.lower() in msg.lower() and pct not in emitted:
                 emitted.add(pct)
-                _put(run_id, "step", str(pct), loop)
+                _put(run_id, "step", str(pct), loop)  # also updates _step_state via _put
                 break
 
     return emit_step
@@ -108,7 +118,7 @@ def _make_step_emitter(steps: list[tuple[str, int]], run_id: str, loop: asyncio.
 def _version_name(clf: str, det: str, vid: int) -> str:
     c = _CLF_DISPLAY.get(clf, clf.replace("_", " ").title())
     d = _DET_DISPLAY.get(det, det.replace("_", " ").title())
-    return f"Classifier:{c} | Detector:{d} | v{vid}"
+    return f"{c} + {d} — v{vid}"
 
 
 def _version_dir(clf: str, det: str, vid: int) -> str:
@@ -295,6 +305,8 @@ async def dispatch(mode: str, classifier_type: str, detector_type: str) -> str:
     """Submit a training job to the thread pool. Returns a run_id."""
     run_id = str(uuid.uuid4())
     _get_or_create_queue(run_id)  # create queue before thread starts
+    with _slock:
+        _step_state[run_id] = {"pct": 0, "mode": mode, "started_at": time.time()}
 
     # Capture the running loop here (async context) so threads can post events
     # back to it via call_soon_threadsafe without calling get_event_loop() from
@@ -304,6 +316,13 @@ async def dispatch(mode: str, classifier_type: str, detector_type: str) -> str:
     target = _run_initial if mode == "initial" else _run_fine_tune
     _executor.submit(target, run_id, classifier_type, detector_type, loop)
     return run_id
+
+
+def get_step_state(run_id: str) -> dict | None:
+    """Return current step state for polling when SSE is not connected."""
+    with _slock:
+        s = _step_state.get(run_id)
+        return dict(s) if s is not None else None
 
 
 async def sse_events(run_id: str):

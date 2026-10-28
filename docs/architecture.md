@@ -6,9 +6,21 @@
 
 ## 1. Purpose & Scope
 
-**AnomalyNetFlow** is a network intrusion detection system with a **training-first UI** that gives a SOC analyst full control over when models train and what they predict — replacing the black-box pipeline of NetGuard IDS with a transparent, incrementally-improving system.
+**AnomalyNetFlow** is a network intrusion detection system (A2 individual coursework) that directly implements the layered design recommended by the **A1 group report** (Pattern Recognition for network IDS — `dev/log-analytics/`).
 
-**In scope:** CIC-IDS2017 as the initial labelled dataset; CSV (CIC-IDS2017 format) and PCAP as inference inputs; XGBoost + Vanilla AE as v1 models; human-in-the-loop labelling via analyst feedback; incremental fine-tuning from the label store.
+**A1 findings that drove A2 design:**
+
+| A1 finding | A2 design response |
+|---|---|
+| RF ≈ perfect F1 on known attacks; recall collapses on unseen attack types (day-based split §4.5) | Stage 2 — Known-Attack Classifier catches known threats; Stage 3 catches what it misses |
+| AE generalises to novel/zero-day attacks; AUC holds under day-based split | Stage 3 — Anomaly Detector (MLP-AE) trained on benign only; always runs after Stage 2 |
+| Both methods complementary; neither alone is sufficient (§4.6) | 3-stage pipeline: Rule Engine → Classifier → Detector — all three always run |
+| "Model retrained based on analyst feedback" stated in pipeline §3.1 but not implemented | Incremental fine-tune loop: 50 analyst verdicts → unlock Fine-tune |
+| p95 AE threshold (DECISIONS.md §D5) | Same p95 threshold — same rationale, same calibration method |
+
+AnomalyNetFlow adds a **training-first UI** that gives a SOC analyst full control over when models train, and a persistent **human-in-the-loop label store** that turns analyst verdicts into training data.
+
+**In scope:** CIC-IDS2017 as the initial labelled dataset; CSV (CIC-IDS2017 format) and PCAP as inference inputs; XGBoost + MLP-AE as v1 models; human-in-the-loop labelling via analyst feedback; incremental fine-tuning from the label store.
 
 **Out of scope:** Live packet capture; real-time streaming inference (planned M5).
 
@@ -17,7 +29,7 @@
 ## 2. Design Principles
 
 - **Single source of truth** — feature registry at `GET /api/features`; no hardcoded column lists in JS or Python.
-- **Durable training** — Celery + Redis; training survives API restarts.
+- **Durable training** — In-process `ThreadPoolExecutor` with SSE progress streaming; polling fallback (`GET /api/training/status/{run_id}`) keeps the UI updated even if the SSE connection drops.
 - **No hard-coded feature lists** — UI reads from the feature registry endpoint.
 - **Minimal runtime dependencies** — SQLite (file-based), no Redis, no Docker required to run locally.
 - **Incremental by default** — v1 ships with the label store and fine-tune loop; swapping models is one registry entry.
@@ -63,8 +75,8 @@
 |---|---|
 | Framework | React 18 + TypeScript + Vite 5 |
 | Routing | react-router-dom v6 (3 tabs: About / Training / Inference) |
-| API client | openapi-typescript generated from `/openapi.json` |
-| State | React useState/useEffect; SSE for training progress |
+| API communication | Native `fetch()` + `EventSource` (SSE) for live training progress |
+| State | React `useState` / `useEffect`; polling fallback when SSE disconnects |
 
 ### Backend
 | | |
@@ -105,13 +117,14 @@ Flow features (72 cols)
 └────────┬──────────┘
          │ SUSPICIOUS
 ┌────────▼──────────┐
-│  XGBoost          │  Supervised classifier   →  predicted label + confidence
-│  (Stage 2)        │  15 CIC-IDS2017 classes
+│  Known-Attack     │  Supervised classifier   →  predicted label + confidence
+│  Classifier       │  15 CIC-IDS2017 classes
+│  (Stage 2)        │  XGBoost or Random Forest
 └────────┬──────────┘
          ↓
 ┌────────▼──────────┐
-│  MLP Autoencoder  │  Anomaly score (MSE)     →  above p95 threshold = anomaly
-│  (Stage 3)        │
+│  Anomaly Detector │  Anomaly score (MSE)     →  above p95 threshold = anomaly
+│  (Stage 3)        │  MLP-AE or Isolation Forest
 └────────┬──────────┘
          ↓
   Consensus → SAFE / SUSPICIOUS / CONFIRMED_CRITICAL
@@ -270,12 +283,13 @@ anomaly-net-flow/
 │   │   └── pipeline.py            # FeatureEngineeringPipeline (VT → corr → MI → scaler)
 │   └── data_loader.py             # DuckDB queries for labelled_flows
 ├── inference/                     # Runtime inference adapters + explainers
-│   └── adapters/
-│       ├── csv_adapter.py         # CSV → feature DataFrame (inference only)
-│       └── pcap_adapter.py        # PCAP → NFStream flow extraction → feature DataFrame
+│   ├── adapters/
+│   │   ├── csv_adapter.py         # CSV → feature DataFrame (inference only)
+│   │   └── pcap_adapter.py        # PCAP → NFStream flow extraction → feature DataFrame
+│   └── explainers/                # Milestone 2: SHAP + AE per-feature reconstruction error
 ├── ui/src/
 │   ├── App.tsx                    # 3-tab layout + active model check
-│   └── pages/                     # AboutPage, TrainingPage, InferencePage
+│   └── pages/                     # AboutPage · TrainingPage · InferencePage
 ├── data/CIC-IDS2017/              # Bundled dataset (.gitignored for size)
 ├── models/                        # Saved artefacts (.gitignored)
 ├── docs/                          # Architecture and design documents

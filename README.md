@@ -1,9 +1,14 @@
-# AnomalyNetFlow
+# AnomalyNetFlow — CS7003NU A2 Individual Coursework
 
-Incremental network intrusion detection with human-in-the-loop labelling.  
-XGBoost · Random Forest · MLP Autoencoder · Isolation Forest · CIC-IDS2017
+AnomalyNetFlow is an incremental network intrusion detection system (NIDS) that directly implements the layered design recommended in the **A1 group report** (Pattern Recognition for network IDS — `dev/log-analytics/`).
 
-Architecture: [`docs/architecture.md`](docs/architecture.md)
+**A1 key finding (§4.6):** Random Forest achieves near-perfect F1 on *known* attacks but its recall collapses on unseen attack types under a day-based split; the Autoencoder generalises better to novel/zero-day traffic because it models normality, not attack signatures. A1 concluded the most effective design is *layered*. AnomalyNetFlow implements exactly that, and adds the incremental feedback loop that A1 §3.1 described ("model retrained based on analyst feedback") but did not implement.
+
+**Pipeline:** Rule Engine → Known-Attack Classifier → Anomaly Detector  
+**Dataset:** CIC-IDS2017 · 2.8 M flows · 15 attack classes  
+**Models:** XGBoost · Random Forest · MLP Autoencoder · Isolation Forest
+
+Full design: [`docs/architecture.md`](docs/architecture.md)
 
 ---
 
@@ -125,8 +130,8 @@ data/CIC-IDS2017/*.csv         Original dataset — stays as CSV, no import
 | Stage | Component | What it does |
 |---|---|---|
 | 1 | **Rule Engine** | Fast deterministic rules — flags obviously benign traffic and exits early |
-| 2 | **Classifier** | XGBoost or Random Forest — predicts one of 15 attack classes or BENIGN |
-| 3 | **Anomaly Detector** | MLP Autoencoder or Isolation Forest — catches novel/zero-day traffic the classifier hasn't seen |
+| 2 | **Known-Attack Classifier** | XGBoost or Random Forest — predicts one of 15 attack classes or BENIGN (supervised, trained with labels) |
+| 3 | **Anomaly Detector** | MLP Autoencoder or Isolation Forest — catches novel/zero-day traffic the classifier hasn't seen (unsupervised, trained on benign only) |
 
 Every alert includes an explainability signal:
 - Classifier → SHAP per-feature contribution
@@ -156,8 +161,9 @@ Base URL: `http://localhost:8000` · Full interactive docs: `http://localhost:80
 | GET | `/api/models/active` | Active model or `null` | No |
 | GET | `/api/models/` | All model versions + metrics | No |
 | POST | `/api/models/{id}/promote` | Promote a version to active | No |
-| POST | `/api/training/start` | Start training — returns `run_id` | No |
+| POST | `/api/training/start` | Start training — returns `run_id` + estimated completion time | No |
 | GET | `/api/training/events/{run_id}` | SSE stream of live training progress | No |
+| GET | `/api/training/status/{run_id}` | Poll current progress % (fallback when SSE disconnects) | No |
 | GET | `/api/training/available-types` | Classifier + detector options | No |
 | GET | `/api/features/` | Feature list from the active model | Yes |
 | POST | `/api/predict/batch` | Upload CSV or PCAP for batch inference | Yes |
@@ -195,10 +201,11 @@ anomaly-net-flow/
 │   ├── feature_eng/
 │   │   └── pipeline.py           FeatureEngineeringPipeline (VT → corr → MI → scaler)
 │   └── data_loader.py            DuckDB queries (CSV + SQLite)
-├── inference/                    Runtime inference adapters
-│   └── adapters/
-│       ├── csv_adapter.py        CSV upload → feature DataFrame
-│       └── pcap_adapter.py       PCAP upload → NFStream flow extraction
+├── inference/                    Runtime inference adapters + explainability (M2)
+│   ├── adapters/
+│   │   ├── csv_adapter.py        CSV upload → feature DataFrame
+│   │   └── pcap_adapter.py       PCAP upload → NFStream flow extraction
+│   └── explainers/               Milestone 2: SHAP (Stage 2) + AE per-feature error (Stage 3)
 ├── ui/                           React 18 + TypeScript + Vite 5
 │   └── src/pages/                AboutPage · TrainingPage · InferencePage
 ├── data/CIC-IDS2017/             Place dataset CSV files here (.gitignored)
@@ -220,12 +227,29 @@ cp .env.demo .env   # then edit as needed
 
 | Variable | Default | Description |
 |---|---|---|
-| `DATABASE_URL` | `sqlite+aiosqlite:///./anomaly_net_flow.db` | SQLite database path |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/anomaly_net_flow.db` | SQLite database path |
 | `BUNDLED_DATASET_DIR` | `data/CIC-IDS2017` | CIC-IDS2017 CSV folder |
 | `FINE_TUNE_K_THRESHOLD` | `50` | Analyst verdicts needed to unlock fine-tune |
 | `AE_REPLAY_BUFFER_FRACTION` | `0.1` | Old benign data replayed during AE fine-tune (prevents forgetting) |
 | `AE_ANOMALY_THRESHOLD_PERCENTILE` | `95` | p-value for anomaly threshold (p90=more alerts, p99=fewer) |
 | `MAX_UPLOAD_MB` | `200` | Max inference file upload size |
+
+---
+
+## Code navigation (where to start reading)
+
+| If you want to understand… | Start here |
+|---|---|
+| The 3-stage pipeline end-to-end | `docs/architecture.md` §5 ML Architecture |
+| Model protocols (what every classifier/detector must implement) | `core/base.py` — `BaseClassifier`, `BaseAnomalyDetector` |
+| How XGBoost / MLP-AE are implemented | `core/classifiers/xgboost_clf.py`, `core/detectors/mlp_ae.py` |
+| Initial training pipeline (CIC-IDS2017 → artefacts) | `training/pipelines/initial.py` |
+| Incremental fine-tune pipeline | `training/pipelines/fine_tune.py` |
+| Feature engineering (VT → corr → MI → scaler) | `training/feature_eng/pipeline.py` |
+| How inference runs at request time | `api/routers/predict.py` |
+| Background training + SSE progress | `api/tasks.py` |
+| DB schema (label store, alerts, model versions) | `api/db/models.py` |
+| How to add a new model in one line | `core/registry.py` |
 
 ---
 

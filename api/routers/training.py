@@ -1,13 +1,44 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
+from api.db.models import TrainingRun
 from core.registry import CLASSIFIERS, ANOMALY_DETECTORS
 from api import tasks
 
 router = APIRouter(prefix="/training", tags=["training"])
+
+_DEFAULT_ESTIMATE = {"initial": (1500, "~25 min"), "fine_tune": (480, "~8 min")}
+
+
+async def _estimate_seconds(db: AsyncSession, mode: str) -> tuple[int, str]:
+    """Query avg duration from the last 5 completed runs of the same mode."""
+    result = await db.execute(
+        select(TrainingRun)
+        .where(
+            TrainingRun.mode == mode,
+            TrainingRun.finished_at.is_not(None),
+            TrainingRun.error.is_(None),
+        )
+        .order_by(TrainingRun.id.desc())
+        .limit(5)
+    )
+    runs = result.scalars().all()
+    if runs:
+        durations = [
+            (r.finished_at - r.started_at).total_seconds()
+            for r in runs
+            if r.finished_at and r.started_at
+        ]
+        if durations:
+            avg = int(sum(durations) / len(durations))
+            mins = max(1, round(avg / 60))
+            return avg, f"~{mins} min"
+    secs, label = _DEFAULT_ESTIMATE.get(mode, (900, "~15 min"))
+    return secs, label
 
 
 class TrainingStartRequest(BaseModel):
@@ -19,7 +50,9 @@ class TrainingStartRequest(BaseModel):
 class TrainingStartResponse(BaseModel):
     run_id: str
     mode: str
-    status: str = "started"
+    acknowledged: bool = True
+    estimated_seconds: int = 0
+    estimated_label: str = ""
     events_url: str
 
 
@@ -32,12 +65,24 @@ async def start_training(req: TrainingStartRequest, db: AsyncSession = Depends(g
     if req.detector_type not in ANOMALY_DETECTORS:
         raise HTTPException(400, f"Unknown detector '{req.detector_type}'")
 
+    est_secs, est_label = await _estimate_seconds(db, req.mode)
     run_id = await tasks.dispatch(req.mode, req.classifier_type, req.detector_type)
     return TrainingStartResponse(
         run_id=run_id,
         mode=req.mode,
+        estimated_seconds=est_secs,
+        estimated_label=est_label,
         events_url=f"/api/training/events/{run_id}",
     )
+
+
+@router.get("/status/{run_id}")
+async def training_status(run_id: str):
+    """Polling endpoint — returns current step % when SSE is not connected."""
+    state = tasks.get_step_state(run_id)
+    if state is None:
+        raise HTTPException(404, f"No active training run '{run_id}'")
+    return state
 
 
 @router.get("/events/{run_id}")

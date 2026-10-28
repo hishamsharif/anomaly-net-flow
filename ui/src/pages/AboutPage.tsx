@@ -31,7 +31,7 @@ export default function AboutPage() {
           on the ML stages.
         </p>
         <p>
-          <strong>Stage 2 — Supervised Classifier:</strong> Trained with labelled data (15 CIC-IDS2017
+          <strong>Stage 2 — Known-Attack Classifier:</strong> Trained with labelled data (15 CIC-IDS2017
           attack categories + BENIGN). Returns a named attack category and confidence score.
           Catches <em>known</em> threats it has seen during training.
         </p>
@@ -51,7 +51,7 @@ export default function AboutPage() {
         </p>
         <ul>
           <li>
-            <strong>Supervised Classifier (Stage 2)</strong> — high precision on known attacks.
+            <strong>Known-Attack Classifier (Stage 2)</strong> — high precision on known attacks.
             Needs labelled training data. Cannot detect attack variants it has not seen.
           </li>
           <li>
@@ -67,7 +67,7 @@ export default function AboutPage() {
       <h2>Models</h2>
       <div className="card">
         <p>
-          <strong>Supervised Classifier (Stage 2) options:</strong>
+          <strong>Known-Attack Classifier (Stage 2) options:</strong>
         </p>
         <ul>
           <li><strong>XGBoost</strong> — gradient-boosted trees; fast, native SHAP explanations.

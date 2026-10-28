@@ -23,8 +23,8 @@ const DET_LABELS: Record<string, string> = {
 }
 
 // Section subtitles explaining the role of each stage
-const CLF_SUBTITLE = 'Supervised — learns from labelled data to name known attack categories (DoS, PortScan, etc.)'
-const DET_SUBTITLE = 'Unsupervised — trained on normal traffic only; flags anything that deviates from the learned baseline (catches zero-days)'
+const CLF_SUBTITLE = 'Supervised — trained with labelled data to classify known attack categories (DoS, PortScan, etc.)'
+const DET_SUBTITLE = 'Unsupervised — trained on normal traffic only; flags anything that deviates from the baseline (catches zero-days)'
 const label = (map: Record<string, string>, key: string) =>
   map[key] ?? key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 
@@ -35,6 +35,7 @@ export default function TrainingPage({ hasModel }: Props) {
   const [logs, setLogs] = useState<string[]>([])
   const [pct, setPct] = useState<number | null>(null)
   const [verdictCount, setVerdictCount] = useState(0)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // Available types loaded from the API
   const [classifiers, setClassifiers] = useState<string[]>(['xgboost'])
@@ -86,6 +87,32 @@ export default function TrainingPage({ hasModel }: Props) {
       logRef.current.scrollTop = logRef.current.scrollHeight
   }, [logs])
 
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }
+
+  const startPolling = (rid: string) => {
+    stopPolling()
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch(`/api/training/status/${rid}`)
+        if (!r.ok) return
+        const s = await r.json()
+        if (s.pct !== undefined) setPct(Number(s.pct))
+        if (Number(s.pct) >= 100) {
+          stopPolling()
+          setTraining(false)
+          fetchModel()
+          fetchHistory()
+          fetchVerdicts()
+        }
+      } catch {}
+    }, 5000)
+  }
+
   const startTraining = async (mode: 'initial' | 'fine_tune') => {
     setTraining(true)
     setPct(0)
@@ -102,11 +129,13 @@ export default function TrainingPage({ hasModel }: Props) {
         setTraining(false)
         return
       }
-      const { run_id } = await resp.json()
+      const { run_id, estimated_label } = await resp.json()
+      setLogs(l => [...l, `Acknowledged — estimated completion: ${estimated_label}`])
       const es = new EventSource(`/api/training/events/${run_id}`)
       es.addEventListener('step', e => setPct(Number(e.data)))
       es.addEventListener('progress', e => setLogs(l => [...l, e.data]))
       es.addEventListener('done', e => {
+        stopPolling()
         setLogs(l => [...l, `✔ ${e.data}`])
         setPct(100)
         setTraining(false)
@@ -117,16 +146,16 @@ export default function TrainingPage({ hasModel }: Props) {
       })
       es.addEventListener('error', e => {
         const msg = (e as MessageEvent).data ?? 'Unknown error'
+        stopPolling()
         setLogs(l => [...l, `✘ ${msg}`])
         setPct(null)
         setTraining(false)
         es.close()
       })
       es.onerror = () => {
-        setLogs(l => [...l, '(connection closed)'])
-        setPct(null)
-        setTraining(false)
         es.close()
+        setLogs(l => [...l, '(SSE disconnected — polling for progress every 5 s…)'])
+        startPolling(run_id)
       }
     } catch (err) {
       setLogs(l => [...l, `Error: ${String(err)}`])
@@ -142,7 +171,7 @@ export default function TrainingPage({ hasModel }: Props) {
     <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', margin: '12px 0' }}>
       <div style={{ flex: 1, minWidth: 200 }}>
         <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--fg)', marginBottom: 2 }}>
-          Stage 2 — Supervised Classifier
+          Stage 2 — Known-Attack Classifier
         </div>
         <div style={{ fontSize: 11, color: 'var(--fg-muted)', marginBottom: 6, lineHeight: 1.4 }}>
           {CLF_SUBTITLE}
