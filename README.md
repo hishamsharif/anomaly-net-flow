@@ -156,7 +156,7 @@ anomaly-net-flow/
 │   ├── ml/
 │   │   ├── registry.py         Add one line here to expose a new model in the UI
 │   │   ├── classifiers/        XGBoostClassifier
-│   │   └── detectors/          VanillaAE
+│   │   └── detectors/          MLPAutoencoder
 │   ├── tasks.py                In-process background training (ThreadPoolExecutor + SSE)
 │   └── routers/                predict, training, models, alerts, features
 ├── training/

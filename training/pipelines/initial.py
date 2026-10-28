@@ -26,7 +26,7 @@ def run(
     artefact_dir: str,
     bundled_dir: str,
     classifier_type: str = "xgboost",
-    detector_type: str = "vanilla_ae",
+    detector_type: str = "mlp_ae",
     on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """

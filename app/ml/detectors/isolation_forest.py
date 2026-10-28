@@ -1,12 +1,12 @@
 """
 Isolation Forest anomaly detector.
 
-Lightweight sklearn-based alternative to VanillaAE. No GPU/PyTorch needed.
+Lightweight sklearn-based alternative to MLPAutoencoder. No GPU/PyTorch needed.
 Trains in seconds even on large datasets. Fine-tune = full retrain (same
 story as XGBoost — trees don't carry weights across runs).
 
 Anomaly score uses the IF decision function negated so that higher = more
-anomalous (consistent with VanillaAE's MSE convention).
+anomalous (consistent with MLPAutoencoder's MSE convention).
 Per-feature explainability: use SHAP TreeExplainer (same API as XGBoost).
 """
 from __future__ import annotations
@@ -67,7 +67,7 @@ class IsolationForestDetector:
         """
         Anomaly score for a single flow (1-D or 2-D array of shape (1, n_features)).
         Higher = more anomalous. Negated from IF's decision_function
-        (which is negative for anomalies) so convention matches VanillaAE.
+        (which is negative for anomalies) so convention matches MLPAutoencoder.
         """
         return float(self.score_batch(x.reshape(1, -1))[0])
 

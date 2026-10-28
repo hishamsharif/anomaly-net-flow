@@ -52,7 +52,7 @@ _CLF_DISPLAY = {
     "random_forest": "RF",
 }
 _DET_DISPLAY = {
-    "vanilla_ae": "AE",
+    "mlp_ae": "MLP-AE",
     "isolation_forest": "IF",
 }
 

@@ -1,10 +1,10 @@
 """
 Fine-tune pipeline.
 
-XGBoost:   full cumulative retrain on all labelled_flows up to the new savepoint
-           (no weight carry-over; trees are additive).
-Vanilla AE: load previous weights → freeze encoder N epochs → fine-tune on
-            incremental rows + replay buffer → unfreeze.
+XGBoost:       full cumulative retrain on all labelled_flows up to the new savepoint
+               (no weight carry-over; trees are additive).
+MLPAutoencoder: load previous weights → freeze encoder N epochs → fine-tune on
+               incremental rows + replay buffer → unfreeze.
 """
 from __future__ import annotations
 import json
@@ -34,7 +34,7 @@ def run(
     artefact_dir: str,
     prev_savepoint_max_id: int,
     classifier_type: str = "xgboost",
-    detector_type: str = "vanilla_ae",
+    detector_type: str = "mlp_ae",
     on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """

@@ -27,9 +27,9 @@ class _AENet(nn.Module):
         return self.decoder(self.encoder(x))
 
 
-class VanillaAE:
+class MLPAutoencoder:
     """
-    MLP autoencoder trained on benign flows.
+    MLP (fully-connected) autoencoder trained on benign flows.
     Anomaly = reconstruction error above p95 threshold on benign validation split.
 
     Fine-tune: load previous weights → freeze encoder N epochs → unfreeze all.
@@ -139,7 +139,7 @@ class VanillaAE:
         }, path)
 
     @classmethod
-    def load(cls, path: str) -> "VanillaAE":
+    def load(cls, path: str) -> "MLPAutoencoder":
         data = joblib.load(path)
         obj = cls(hidden_dims=data["hidden_dims"], epochs=data["epochs"],
                   batch_size=data["batch_size"], lr=data["lr"])

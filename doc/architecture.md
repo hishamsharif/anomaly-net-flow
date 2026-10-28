@@ -79,10 +79,10 @@
 | Component | v1 | Upgrade path |
 |---|---|---|
 | Supervised classifier | **XGBoost** — full cumulative retrain; native SHAP. **Random Forest** — bootstrap aggregation; balanced class weight; SHAP TreeExplainer | **FT-Transformer** — weight-based fine-tuning; shared encoder |
-| Anomaly detector | **Vanilla AE** (MLP, MSE loss) + **Isolation Forest** (sklearn, no GPU) | **Transformer-AE / VAE** — self-attention over feature tokens |
+| Anomaly detector | **MLP Autoencoder** (fully-connected, MSE loss) + **Isolation Forest** (sklearn, no GPU) | **Transformer-AE / VAE** — self-attention over feature tokens |
 | Class imbalance | SMOTE on train split only | — |
 | Explainability (classifier) | SHAP TreeExplainer (XGBoost + Isolation Forest) | Attention weights |
-| Explainability (AE) | Per-feature reconstruction error `(x − x̂)²` — no SHAP needed | — |
+| Explainability (MLP-AE) | Per-feature reconstruction error `(x − x̂)²` — no SHAP needed | — |
 | Metrics | F1 macro, PR-AUC, Recall, FAR, AMR | — |
 | Training reads | DuckDB in-process | — |
 | Component registry | `app/ml/registry.py` — add class + one line | — |
@@ -120,8 +120,8 @@ Flow features (72 cols)
 ### Why XGBoost + Random Forest
 Kotwal & Lanjekar (2024): XGBoost F1 = 95.95% vs RF 88.7% on CIC-IDS2017. XGBoost: native SHAP, handles class imbalance with `scale_pos_weight`, fast retrain (~60s on 2.8M rows). RF: lower hyperparameter sensitivity, built-in bootstrap aggregation reduces overfitting on small incremental datasets, `class_weight="balanced"` handles imbalance without resampling overhead. Both use full cumulative retrain (no weight carry-over) and share the same `predict() → (label, confidence)` interface.
 
-### Why Vanilla AE (v1)
-Simple MLP encoder-decoder. MSE reconstruction loss. Fast to train and debug. Interpretable threshold (p95 on benign validation). Upgrade to Transformer-AE when self-attention over feature tokens is needed (correct inductive bias for tabular data; LSTM is wrong — it imposes artificial sequence ordering on simultaneous flow measurements).
+### Why MLP Autoencoder (v1)
+Multi-Layer Perceptron encoder-decoder, MSE reconstruction loss. Correct inductive bias for tabular network flow data — no convolutions (for images), no recurrence (for sequences). Fast to train and debug. Interpretable threshold (p95 on benign validation). Per-feature reconstruction error `(x − x̂)²` gives free explainability with no SHAP overhead. Upgrade to Transformer-AE when self-attention over feature tokens is needed.
 
 ### Transfer learning path (AE)
 NSL-KDD (39 features) pretrain → CIC-IDS2017 (72 features) fine-tune. Freeze encoder first N epochs, then unfreeze. FT-Transformer upgrade: shares encoder with AE for a joint supervised + unsupervised backbone.
@@ -233,7 +233,7 @@ anomaly-net-flow/
 │   │   ├── base.py                # BaseClassifier + BaseAnomalyDetector protocols
 │   │   ├── registry.py            # CLASSIFIERS + ANOMALY_DETECTORS dicts
 │   │   ├── classifiers/xgboost_clf.py
-│   │   └── detectors/vanilla_ae.py
+│   │   └── detectors/mlp_ae.py
 │   └── routers/                   # predict, training, models, alerts, features
 ├── training/
 │   ├── pipelines/initial.py       # CIC-IDS2017 initial training

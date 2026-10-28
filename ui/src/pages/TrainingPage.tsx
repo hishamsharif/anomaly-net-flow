@@ -18,7 +18,7 @@ const CLF_LABELS: Record<string, string> = {
   random_forest: 'Random Forest',
 }
 const DET_LABELS: Record<string, string> = {
-  vanilla_ae: 'Vanilla AE (Autoencoder)',
+  mlp_ae: 'MLP Autoencoder',
   isolation_forest: 'Isolation Forest',
 }
 const label = (map: Record<string, string>, key: string) =>
@@ -33,11 +33,11 @@ export default function TrainingPage({ hasModel }: Props) {
 
   // Available types loaded from the API
   const [classifiers, setClassifiers] = useState<string[]>(['xgboost'])
-  const [detectors, setDetectors] = useState<string[]>(['vanilla_ae'])
+  const [detectors, setDetectors] = useState<string[]>(['mlp_ae'])
 
   // Phase 1 selections
   const [clf, setClf] = useState('xgboost')
-  const [det, setDet] = useState('vanilla_ae')
+  const [det, setDet] = useState('mlp_ae')
 
   const K = 50
   const logRef = useRef<HTMLDivElement>(null)

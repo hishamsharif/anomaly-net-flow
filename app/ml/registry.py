@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 from app.ml.classifiers.xgboost_clf import XGBoostClassifier
 from app.ml.classifiers.random_forest_clf import RandomForestClassifier
-from app.ml.detectors.vanilla_ae import VanillaAE
+from app.ml.detectors.mlp_ae import MLPAutoencoder
 from app.ml.detectors.isolation_forest import IsolationForestDetector
 
 # Supervised classifiers: name → class
@@ -23,7 +23,7 @@ CLASSIFIERS: dict[str, type] = {
 # Unsupervised anomaly detectors: name → class
 # Upgrade path: add TransformerAE or VAE here when ready.
 ANOMALY_DETECTORS: dict[str, type] = {
-    "vanilla_ae": VanillaAE,
+    "mlp_ae": MLPAutoencoder,
     "isolation_forest": IsolationForestDetector,   # lightweight; no GPU needed
     # "transformer_ae": TransformerAE,
     # "vae": VAE,

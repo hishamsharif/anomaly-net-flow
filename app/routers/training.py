@@ -13,7 +13,7 @@ router = APIRouter(prefix="/training", tags=["training"])
 class TrainingStartRequest(BaseModel):
     mode: str = "initial"           # initial | fine_tune
     classifier_type: str = "xgboost"
-    detector_type: str = "vanilla_ae"
+    detector_type: str = "mlp_ae"
 
 
 class TrainingStartResponse(BaseModel):
