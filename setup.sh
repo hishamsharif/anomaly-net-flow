@@ -95,7 +95,7 @@ ok "models/  logs/  ready"
 
 # ── 8. Check for CIC-IDS2017 dataset ──────────────────────────────────────
 step "Checking CIC-IDS2017 dataset"
-CSV_COUNT=$(find data/CIC-IDS2017 -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
+CSV_COUNT=$(find -L data/CIC-IDS2017 -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
 if [ "$CSV_COUNT" -gt 0 ]; then
   ok "Found ${CSV_COUNT} CSV file(s) in data/CIC-IDS2017/"
 else

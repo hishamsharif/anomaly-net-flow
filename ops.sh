@@ -76,7 +76,7 @@ _verify_setup() {
 
   # Dataset (warn only — training will fail but the API starts fine)
   local csv_count
-  csv_count=$(find "$SCRIPT_DIR/data/CIC-IDS2017" -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
+  csv_count=$(find -L "$SCRIPT_DIR/data/CIC-IDS2017" -maxdepth 1 -name "*.csv" 2>/dev/null | wc -l)
   if [ "$csv_count" -eq 0 ]; then
     warn "No CIC-IDS2017 CSV files found in data/CIC-IDS2017/ — initial training will fail"
   fi
