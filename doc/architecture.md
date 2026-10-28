@@ -79,13 +79,16 @@
 | Component | v1 | Upgrade path |
 |---|---|---|
 | Supervised classifier | **XGBoost** — full cumulative retrain; native SHAP | **FT-Transformer** — weight-based fine-tuning; shared encoder |
-| Anomaly detector | **Vanilla AE** (MLP, MSE loss) — fast, interpretable | **Transformer-AE / VAE** — self-attention over feature tokens |
+| Anomaly detector | **Vanilla AE** (MLP, MSE loss) + **Isolation Forest** (sklearn, no GPU) | **Transformer-AE / VAE** — self-attention over feature tokens |
 | Class imbalance | SMOTE on train split only | — |
-| Explainability | SHAP (XGBoost native) | Attention weights |
+| Explainability (classifier) | SHAP TreeExplainer (XGBoost + Isolation Forest) | Attention weights |
+| Explainability (AE) | Per-feature reconstruction error `(x − x̂)²` — no SHAP needed | — |
+| Metrics | F1 macro, PR-AUC, Recall, FAR, AMR | — |
 | Training reads | DuckDB in-process | — |
 | Component registry | `app/ml/registry.py` — add class + one line | — |
 | Fine-tune XGBoost | Full cumulative retrain (no weight carry-over) | Warm-start trees at > 10 M rows |
 | Fine-tune AE | Load weights → freeze encoder → fine-tune + replay | Shared encoder joint fine-tuning |
+| Fine-tune IF | Full retrain on cumulative benign flows (no weight carry-over) | — |
 
 ---
 

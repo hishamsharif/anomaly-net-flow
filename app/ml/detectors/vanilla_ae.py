@@ -74,7 +74,23 @@ class VanillaAE:
 
     # ------------------------------------------------------------------
     def score(self, x: np.ndarray) -> float:
+        """Total reconstruction error (mean MSE across all features)."""
         return float(self._reconstruction_errors(x.reshape(1, -1))[0])
+
+    def feature_errors(self, x: np.ndarray) -> np.ndarray:
+        """
+        Per-feature squared reconstruction error: (x_input - x_reconstructed)².
+
+        Returns a 1-D array of length n_features. Features with high error
+        are the ones the AE failed to reconstruct — i.e. the features that
+        drove the anomaly flag. Use this directly in the analyst alert panel
+        to show 'why this flow was flagged' without needing SHAP.
+        """
+        self._net.eval()
+        with torch.no_grad():
+            t = torch.tensor(x.reshape(1, -1), dtype=torch.float32)
+            recon = self._net(t).numpy()
+        return ((x.reshape(1, -1) - recon) ** 2).flatten()
 
     def is_anomaly(self, x: np.ndarray) -> tuple[bool, float]:
         s = self.score(x)

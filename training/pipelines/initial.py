@@ -93,10 +93,18 @@ def run(
 
     # ── 7. Evaluate classifier on test set ───────────────────────────────
     progress("Evaluating classifier on test split …")
-    y_pred = clf.predict(X_test)
-    if isinstance(y_pred[0], tuple):        # predict() returns (label, conf) tuples
-        y_pred = [p[0] for p in y_pred]
-    metrics = _compute_metrics(y_test, y_pred)
+    raw_pred = clf.predict(X_test)
+    if raw_pred and isinstance(raw_pred[0], tuple):   # returns (label, confidence) tuples
+        y_pred = [p[0] for p in raw_pred]
+        # Attack confidence score: confidence if predicted attack, else 1-confidence
+        y_scores = np.array([
+            p[1] if p[0] != "BENIGN" else 1.0 - p[1]
+            for p in raw_pred
+        ])
+    else:
+        y_pred = list(raw_pred)
+        y_scores = None
+    metrics = _compute_metrics(y_test, y_pred, y_scores)
     progress(f"Test  F1={metrics['f1']:.4f}  FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}")
 
     # ── 8. Train anomaly detector on benign train flows only ──────────────
@@ -138,20 +146,42 @@ def run(
     }
 
 
-def _compute_metrics(y_true, y_pred) -> dict:
-    """Compute F1 (macro), FAR, AMR for binary BENIGN vs ATTACK framing."""
+def _compute_metrics(y_true, y_pred, y_scores: np.ndarray | None = None) -> dict:
+    """
+    Compute F1 (macro), FAR, AMR, Recall, and PR-AUC for binary BENIGN vs ATTACK framing.
+
+    y_scores: optional 1-D array of attack confidence scores for PR-AUC.
+              If None, PR-AUC is approximated from binary predictions (less precise).
+    PR-AUC is the preferred summary metric for imbalanced IDS data — it focuses on
+    the minority (attack) class and is not inflated by the dominant benign majority.
+    """
+    from sklearn.metrics import average_precision_score
+
     report = classification_report(y_true, y_pred, output_dict=True, zero_division=0)
     f1_macro = report.get("macro avg", {}).get("f1-score", 0.0)
 
-    # Binary: BENIGN=negative, everything else=positive (attack)
-    y_bin_true = np.array(["ATTACK" if v != "BENIGN" else "BENIGN" for v in y_true])
-    y_bin_pred = np.array(["ATTACK" if v != "BENIGN" else "BENIGN" for v in y_pred])
+    # Binary framing: BENIGN = negative (0), everything else = positive / attack (1)
+    y_bin_true = np.array([0 if v == "BENIGN" else 1 for v in y_true])
+    y_bin_pred = np.array([0 if v == "BENIGN" else 1 for v in y_pred])
 
-    labels = ["BENIGN", "ATTACK"]
-    cm = confusion_matrix(y_bin_true, y_bin_pred, labels=labels)
+    cm = confusion_matrix(y_bin_true, y_bin_pred, labels=[0, 1])
     tn, fp, fn, tp = cm.ravel() if cm.size == 4 else (0, 0, 0, 0)
 
-    far = fp / (fp + tn) if (fp + tn) > 0 else 0.0   # false alarm rate
-    amr = fn / (fn + tp) if (fn + tp) > 0 else 0.0   # attack miss rate
+    far    = fp / (fp + tn) if (fp + tn) > 0 else 0.0   # false alarm rate
+    amr    = fn / (fn + tp) if (fn + tp) > 0 else 0.0   # attack miss rate
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0   # detection rate
 
-    return {"f1": float(f1_macro), "far": float(far), "amr": float(amr)}
+    # PR-AUC: use attack confidence scores if provided, otherwise binary predictions
+    scores_for_pr = y_scores if y_scores is not None else y_bin_pred.astype(float)
+    try:
+        pr_auc = float(average_precision_score(y_bin_true, scores_for_pr))
+    except Exception:
+        pr_auc = 0.0
+
+    return {
+        "f1":     float(f1_macro),
+        "far":    float(far),
+        "amr":    float(amr),
+        "recall": float(recall),
+        "pr_auc": float(pr_auc),
+    }

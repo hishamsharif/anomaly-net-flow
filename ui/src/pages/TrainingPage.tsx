@@ -143,6 +143,14 @@ export default function TrainingPage({ hasModel }: Props) {
                 <div className="metric-value">{fmt(activeModel.metrics?.f1)}</div>
               </div>
               <div className="metric">
+                <div className="metric-label">PR-AUC</div>
+                <div className="metric-value">{fmt(activeModel.metrics?.pr_auc)}</div>
+              </div>
+              <div className="metric">
+                <div className="metric-label">Recall</div>
+                <div className="metric-value">{fmt(activeModel.metrics?.recall)}</div>
+              </div>
+              <div className="metric">
                 <div className="metric-label">FAR</div>
                 <div className="metric-value">{fmt(activeModel.metrics?.far)}</div>
               </div>
@@ -209,6 +217,8 @@ export default function TrainingPage({ hasModel }: Props) {
                   <th>Version</th>
                   <th>Type</th>
                   <th>F1</th>
+                  <th>PR-AUC</th>
+                  <th>Recall</th>
                   <th>FAR</th>
                   <th>AMR</th>
                   <th>Status</th>
@@ -221,6 +231,8 @@ export default function TrainingPage({ hasModel }: Props) {
                     <td>v{m.id}</td>
                     <td style={{ fontSize: 12 }}>{m.classifier_type} + {m.detector_type}</td>
                     <td>{fmt(m.metrics?.f1)}</td>
+                    <td>{fmt(m.metrics?.pr_auc)}</td>
+                    <td>{fmt(m.metrics?.recall)}</td>
                     <td>{fmt(m.metrics?.far)}</td>
                     <td>{fmt(m.metrics?.amr)}</td>
                     <td>
