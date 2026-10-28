@@ -294,7 +294,7 @@ anomaly-net-flow/
 ├── models/                        # Saved artefacts (.gitignored)
 ├── docs/                          # Architecture and design documents
 ├── tests/
-├── ops.sh                         # start | stop | restart | status | logs | ui | train
+├── ops.sh                         # start | stop | restart | status | logs | ui | train [mode] [clf] [det] [--follow]
 └── requirements.txt
 ```
 
@@ -312,3 +312,17 @@ anomaly-net-flow/
 - **PCAP/CSV uploads are inference-only** — they never touch the training store directly.
 - **SQLite + DuckDB**: SQLite (file-based, no server) for operational writes (analyst verdicts, model versions, alerts); DuckDB in-process attaches SQLite and reads CIC-IDS2017 CSV files directly at training time — no import, no database server needed.
 - **GPU/CUDA**: MLP-AE auto-detects CUDA (`torch.cuda.is_available()`). State dicts saved on CPU for device-portable joblib files. XGBoost uses `tree_method="hist"` (change to `device="cuda"` for GPU-accelerated trees).
+
+---
+
+## Expected behaviour — metrics on initial training
+
+| Metric | Typical value | Why |
+|---|---|---|
+| `known_attack_f1` | ~0.90+ | Classifier on Mon-Thu attack classes only — valid performance measure |
+| `f1` (macro, all classes) | ~0.07 | Test set = Friday flows; most Friday attack types not in training → F1=0 for those classes; macro average divided by 13 |
+| `amr` | ~0.99 | 99% of Friday attacks misclassified as BENIGN by classifier — **Stage 3 AE catches these** |
+| `far` | ~0.0002 | Only 0.02% of benign flows falsely flagged — classifier is precise |
+| `ae_threshold` | ~0.003 | p95 of benign reconstruction errors after QuantileTransformer — a flow above this is anomalous |
+
+**The low macro F1 is a feature, not a bug.** It demonstrates why Stage 3 is needed: the Known-Attack Classifier handles known attacks well; the Anomaly Detector catches what it misses (novel/zero-day).
