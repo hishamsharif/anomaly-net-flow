@@ -115,7 +115,8 @@ cmd_start() {
   _free_port "$API_PORT"
   info "Starting API on port ${API_PORT} ..."
   # conda run acts as a wrapper — save its PID for stop/restart, but health-check the port
-  PYTHONPATH="$SCRIPT_DIR" conda run -n "$CONDA_ENV" \
+  # --no-capture-output: conda forwards the child's stdout/stderr so the >> redirect works
+  PYTHONPATH="$SCRIPT_DIR" conda run --no-capture-output -n "$CONDA_ENV" \
     uvicorn api.main:app --host 0.0.0.0 --port "$API_PORT" >> "$API_LOG" 2>&1 &
   echo $! > "$API_PID"
   # Poll the health endpoint for up to 15 s before declaring failure
