@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from app.ml.base import BaseClassifier, BaseAnomalyDetector
 
 from app.ml.classifiers.xgboost_clf import XGBoostClassifier
+from app.ml.classifiers.random_forest_clf import RandomForestClassifier
 from app.ml.detectors.vanilla_ae import VanillaAE
 from app.ml.detectors.isolation_forest import IsolationForestDetector
 
@@ -15,6 +16,7 @@ from app.ml.detectors.isolation_forest import IsolationForestDetector
 # Upgrade path: add FT-Transformer here when ready.
 CLASSIFIERS: dict[str, type] = {
     "xgboost": XGBoostClassifier,
+    "random_forest": RandomForestClassifier,
     # "ft_transformer": FTTransformerClassifier,
 }
 

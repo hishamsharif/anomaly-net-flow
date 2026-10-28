@@ -78,7 +78,7 @@
 ### ML
 | Component | v1 | Upgrade path |
 |---|---|---|
-| Supervised classifier | **XGBoost** — full cumulative retrain; native SHAP | **FT-Transformer** — weight-based fine-tuning; shared encoder |
+| Supervised classifier | **XGBoost** — full cumulative retrain; native SHAP. **Random Forest** — bootstrap aggregation; balanced class weight; SHAP TreeExplainer | **FT-Transformer** — weight-based fine-tuning; shared encoder |
 | Anomaly detector | **Vanilla AE** (MLP, MSE loss) + **Isolation Forest** (sklearn, no GPU) | **Transformer-AE / VAE** — self-attention over feature tokens |
 | Class imbalance | SMOTE on train split only | — |
 | Explainability (classifier) | SHAP TreeExplainer (XGBoost + Isolation Forest) | Attention weights |
@@ -117,8 +117,8 @@ Flow features (72 cols)
   Consensus → SAFE / SUSPICIOUS / CONFIRMED_CRITICAL
 ```
 
-### Why XGBoost
-Kotwal & Lanjekar (2024): XGBoost F1 = 95.95% vs RF 88.7% on CIC-IDS2017. Native SHAP. Handles class imbalance with `scale_pos_weight`. Fast retrain (~60s on 2.8M rows).
+### Why XGBoost + Random Forest
+Kotwal & Lanjekar (2024): XGBoost F1 = 95.95% vs RF 88.7% on CIC-IDS2017. XGBoost: native SHAP, handles class imbalance with `scale_pos_weight`, fast retrain (~60s on 2.8M rows). RF: lower hyperparameter sensitivity, built-in bootstrap aggregation reduces overfitting on small incremental datasets, `class_weight="balanced"` handles imbalance without resampling overhead. Both use full cumulative retrain (no weight carry-over) and share the same `predict() → (label, confidence)` interface.
 
 ### Why Vanilla AE (v1)
 Simple MLP encoder-decoder. MSE reconstruction loss. Fast to train and debug. Interpretable threshold (p95 on benign validation). Upgrade to Transformer-AE when self-attention over feature tokens is needed (correct inductive bias for tabular data; LSTM is wrong — it imposes artificial sequence ordering on simultaneous flow measurements).
