@@ -56,6 +56,54 @@ _DET_DISPLAY = {
     "isolation_forest": "IF",
 }
 
+# Ordered (keyword, percent) pairs — first match wins.
+# The 'done' event always sends 100; these cover the pipeline body.
+_STEP_INITIAL: list[tuple[str, int]] = [
+    ("Loading CIC-IDS2017",      5),
+    ("Splitting ",               12),
+    ("Step 1/3",                 20),
+    ("Step 2/3",                 30),
+    ("Step 3/3",                 38),
+    ("Feature engineering:",     45),
+    ("Scaler --",                52),
+    ("Applying SMOTE",           60),
+    ("Training ",                68),   # "Training xgboost classifier …"
+    ("Evaluating classifier",    78),
+    ("anomaly detector",         84),   # "Training mlp_ae anomaly detector …"
+    ("Top-20 features",          88),
+    ("Saving model",             92),
+    ("Loading model",            97),
+]
+_STEP_FINE_TUNE: list[tuple[str, int]] = [
+    ("Fetching incremental",     5),
+    ("Loading previous",        10),
+    ("Step 1/3",                18),
+    ("Step 2/3",                28),
+    ("Step 3/3",                36),
+    ("Feature engineering:",    44),
+    ("Scaler --",               50),
+    ("Retraining ",             58),    # "Retraining xgboost …"
+    ("Evaluating",              70),
+    ("Fine-tuning",             78),    # "Fine-tuning AE …"
+    ("Replay buffer",           84),
+    ("Saving",                  90),
+    ("Loading model",           97),
+]
+
+
+def _make_step_emitter(steps: list[tuple[str, int]], run_id: str, loop: asyncio.AbstractEventLoop):
+    """Return a function that, given a message, emits a step event for the first matching keyword."""
+    emitted: set[int] = set()
+
+    def emit_step(msg: str) -> None:
+        for keyword, pct in steps:
+            if keyword.lower() in msg.lower() and pct not in emitted:
+                emitted.add(pct)
+                _put(run_id, "step", str(pct), loop)
+                break
+
+    return emit_step
+
 
 def _version_name(clf: str, det: str, vid: int) -> str:
     c = _CLF_DISPLAY.get(clf, clf.replace("_", " ").title())
@@ -79,7 +127,10 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
     from core.store import model_store
     from training.pipelines.initial import run as pipeline_run
 
+    emit_step = _make_step_emitter(_STEP_INITIAL, run_id, loop)
+
     def progress(msg: str):
+        emit_step(msg)
         _put(run_id, "progress", msg, loop)
 
     db = get_sync_db()
@@ -132,6 +183,7 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
             metrics=metrics,
         )
 
+        _put(run_id, "step", "100", loop)
         _put(run_id, "done", f"Training complete — {name} active", loop)
 
     except Exception as exc:
@@ -160,7 +212,10 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
     from core.store import model_store
     from training.pipelines.fine_tune import run as pipeline_run
 
+    emit_step = _make_step_emitter(_STEP_FINE_TUNE, run_id, loop)
+
     def progress(msg: str):
+        emit_step(msg)
         _put(run_id, "progress", msg, loop)
 
     db = get_sync_db()
@@ -218,6 +273,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
             metrics=metrics,
         )
 
+        _put(run_id, "step", "100", loop)
         _put(run_id, "done", f"Fine-tune complete — {name} active", loop)
 
     except Exception as exc:

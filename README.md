@@ -72,11 +72,12 @@ Training reads the CIC-IDS2017 CSVs directly (no import step), runs feature engi
 ```
 bash setup.sh                  First-time setup (run once)
 
-bash ops.sh start              Start the API
+bash ops.sh start              Start the API in background (logs → logs/api.log)
+bash ops.sh fg                 Start the API in foreground (logs direct to terminal, Ctrl-C to stop)
 bash ops.sh stop               Stop the API
 bash ops.sh restart            Restart the API
 bash ops.sh status             Show running status + health check
-bash ops.sh logs               Tail the API log  (Ctrl-C to exit)
+bash ops.sh logs               Tail the background log  (Ctrl-C to exit)
 bash ops.sh ui                 Start the React UI  (port 5173)
 bash ops.sh train              Trigger initial training
 bash ops.sh train fine_tune    Trigger incremental fine-tune
@@ -84,6 +85,13 @@ bash ops.sh verify             Check setup is complete
 bash ops.sh open               Open the UI in your browser
 bash ops.sh help               Show all commands
 ```
+
+**Logging:**
+
+| Mode | How to run | Where logs go |
+|---|---|---|
+| Background (default) | `bash ops.sh start` | `logs/api.log` — read with `bash ops.sh logs` |
+| Foreground (troubleshooting) | `bash ops.sh fg` | Directly to terminal — Ctrl-C to stop |
 
 ---
 

@@ -184,6 +184,24 @@ cmd_logs() {
   tail -f "$API_LOG"
 }
 
+cmd_fg() {
+  _verify_setup
+  if curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
+    warn "API already running on port ${API_PORT} — stop it first:  bash ops.sh stop"
+    exit 1
+  fi
+  _free_port "$API_PORT"
+  sep
+  ok "Starting API in foreground on port ${API_PORT}"
+  ok "All log output printed directly to this terminal"
+  ok "Press Ctrl-C to stop"
+  sep
+  echo ""
+  # Run in foreground — logs go directly to stdout/stderr (no log file)
+  PYTHONPATH="$SCRIPT_DIR" conda run -n "$CONDA_ENV" \
+    uvicorn api.main:app --host 0.0.0.0 --port "$API_PORT" --log-level info
+}
+
 cmd_ui() {
   _check_setup
   if ! command -v node &>/dev/null; then
@@ -240,11 +258,12 @@ cmd_help() {
   echo ""
   echo -e "  ${BOLD}Usage:${NC}  bash ops.sh <command>"
   echo ""
-  echo -e "  ${CYAN}start${NC}              Start the API server"
-  echo -e "  ${CYAN}stop${NC}               Stop the API server"
-  echo -e "  ${CYAN}restart${NC}            Restart the API server"
+  echo -e "  ${CYAN}start${NC}              Start the API in background (logs → logs/api.log)"
+  echo -e "  ${CYAN}fg${NC}                 Start the API in foreground (logs to terminal, Ctrl-C to stop)"
+  echo -e "  ${CYAN}stop${NC}               Stop the API"
+  echo -e "  ${CYAN}restart${NC}            Restart the API"
   echo -e "  ${CYAN}status${NC}             Show running status + health check"
-  echo -e "  ${CYAN}logs${NC}               Tail the API log (Ctrl-C to exit)"
+  echo -e "  ${CYAN}logs${NC}               Tail the background log (Ctrl-C to exit)"
   echo -e "  ${CYAN}ui${NC}                 Start the React UI  (port ${UI_PORT})"
   echo -e "  ${CYAN}train [mode]${NC}       Start training — mode: initial (default) | fine_tune"
   echo -e "  ${CYAN}open${NC}               Open the UI in your browser"
@@ -261,6 +280,7 @@ shift || true
 
 case "$COMMAND" in
   start)   cmd_start ;;
+  fg)      cmd_fg ;;
   stop)    cmd_stop ;;
   restart) cmd_restart ;;
   status)  cmd_status ;;

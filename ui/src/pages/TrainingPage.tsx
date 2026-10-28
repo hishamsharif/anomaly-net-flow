@@ -29,6 +29,7 @@ export default function TrainingPage({ hasModel }: Props) {
   const [history, setHistory] = useState<ModelInfo[]>([])
   const [training, setTraining] = useState(false)
   const [logs, setLogs] = useState<string[]>([])
+  const [pct, setPct] = useState<number | null>(null)
   const [verdictCount, setVerdictCount] = useState(0)
 
   // Available types loaded from the API
@@ -83,6 +84,7 @@ export default function TrainingPage({ hasModel }: Props) {
 
   const startTraining = async (mode: 'initial' | 'fine_tune') => {
     setTraining(true)
+    setPct(0)
     setLogs([`Starting ${mode === 'initial' ? 'initial' : 'fine-tune'} training…`])
     try {
       const resp = await fetch('/api/training/start', {
@@ -98,9 +100,11 @@ export default function TrainingPage({ hasModel }: Props) {
       }
       const { run_id } = await resp.json()
       const es = new EventSource(`/api/training/events/${run_id}`)
+      es.addEventListener('step', e => setPct(Number(e.data)))
       es.addEventListener('progress', e => setLogs(l => [...l, e.data]))
       es.addEventListener('done', e => {
         setLogs(l => [...l, `✔ ${e.data}`])
+        setPct(100)
         setTraining(false)
         es.close()
         fetchModel()
@@ -110,11 +114,13 @@ export default function TrainingPage({ hasModel }: Props) {
       es.addEventListener('error', e => {
         const msg = (e as MessageEvent).data ?? 'Unknown error'
         setLogs(l => [...l, `✘ ${msg}`])
+        setPct(null)
         setTraining(false)
         es.close()
       })
       es.onerror = () => {
         setLogs(l => [...l, '(connection closed)'])
+        setPct(null)
         setTraining(false)
         es.close()
       }
@@ -282,10 +288,33 @@ export default function TrainingPage({ hasModel }: Props) {
         </>
       )}
 
-      {/* ── Training log ── */}
+      {/* ── Training progress + log ── */}
       {logs.length > 0 && (
         <>
           <h2>Training log</h2>
+
+          {/* Progress bar — visible while training or just completed */}
+          {pct !== null && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
+                <span style={{ color: 'var(--fg-muted)' }}>
+                  {pct < 100 ? 'Training in progress…' : 'Complete'}
+                </span>
+                <span style={{ fontWeight: 600 }}>{pct}%</span>
+              </div>
+              <div className="progress-wrap">
+                <div
+                  className="progress-bar"
+                  style={{
+                    width: `${pct}%`,
+                    transition: 'width 0.4s ease',
+                    background: pct === 100 ? 'var(--color-green, #22c55e)' : undefined,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           <div className="log" ref={logRef}>
             {logs.join('\n')}
           </div>
