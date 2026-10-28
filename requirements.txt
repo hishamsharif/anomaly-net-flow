@@ -23,7 +23,7 @@ pandas>=2.2.0
 anyio>=4.4.0               # asyncio.to_thread back-compat shim
 
 # Inference adapters
-scapy>=2.5.0               # PCAP flow extraction
+nfstream>=6.5.0            # PCAP → CICFlowMeter-compatible features (C-backed, fast)
 
 # Dev / test
 pytest>=8.0.0

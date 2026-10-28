@@ -161,7 +161,7 @@ CREATE TABLE training_savepoints (
 | Format | Adapter | Labels? |
 |---|---|---|
 | CSV (CIC-IDS2017 style) | `CSVInferenceAdapter` — drops Label col silently | No — inference only |
-| PCAP / PCAPNG | `PcapAdapter` — scapy flow extraction | No — inference only |
+| PCAP / PCAPNG | `PcapAdapter` — NFStream bidirectional flow extraction (CICFlowMeter-compatible features) | No — inference only |
 
 Both feed the inference pipeline only. Analyst verdicts on the resulting alerts become the labelled increment for the next fine-tune.
 
@@ -209,11 +209,11 @@ Analyst uploads CSV or PCAP → batch inference → alerts table populated with 
 |---|---|
 | M1 Core | XGBoost + Vanilla AE, label store, analyst feedback, fine-tune loop |
 | M2 Explainability | SHAP waterfall charts in alert detail panel |
-| M3 Live capture | PCAP upload with full scapy/pyflowmeter flow extraction |
-| M4 Multi-dataset | NSL-KDD + UNSW-NB15 tabs; dataset-specific feature registries |
-| M5 Streaming | WebSocket inference; sub-100 ms per-flow latency |
-| M6 Auth | JWT + analyst vs admin roles |
-| M7 Export | PDF/CSV report generation via Celery |
+| M3 Multi-dataset | NSL-KDD + UNSW-NB15 tabs; dataset-specific feature registries |
+| M4 Auth | JWT + analyst vs admin roles |
+| M5 Export | PDF/CSV report generation |
+| M6 Streaming | WebSocket inference; sub-100 ms per-flow latency |
+| M7 Packet-based DL | 1D-CNN / LSTM on raw packet bytes — flags active connections before the flow completes (no 15 s wait for statistical feature aggregation); enables sub-second detection of zero-days and encrypted threats. Different input format from v1 flow features; requires a separate adapter and model stack alongside the flow-based pipeline. |
 
 ---
 
