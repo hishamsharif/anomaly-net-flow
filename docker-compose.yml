@@ -1,0 +1,58 @@
+services:
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      # To build with CUDA PyTorch (~2.5 GB):
+      #   docker compose build --build-arg TORCH_BUILD_TYPE=cu121 api
+      # Prerequisites: nvidia-container-toolkit installed + 'deploy' block uncommented below
+    ports:
+      - "8000:8000"
+    volumes:
+      # Dataset CSVs and SQLite DB — persisted on the host, not baked into the image.
+      # Place CIC-IDS2017 CSV files in data/CIC-IDS2017/ before the first training run.
+      # See README.md → "Quick start — Docker" for dataset download instructions.
+      - ./data:/app/data
+      # Trained model artefacts — persisted so restarting the container keeps the model.
+      - ./models:/app/models
+      # CSV symlink target — data/CIC-IDS2017/ contains symlinks pointing here.
+      # Mount the actual CSV directory so Docker can resolve them.
+      - /home/hhaniffa/dev/modules/CS7003NU-Advanced-AI-Technologies/dev/anomaly-framework/data/cic-ids-2017:/home/hhaniffa/dev/modules/CS7003NU-Advanced-AI-Technologies/dev/anomaly-framework/data/cic-ids-2017:ro
+    env_file:
+      - .env
+    environment:
+      # Allow the nginx UI container (port 80) to call the API cross-origin.
+      # This is set here (not in .env) so it auto-applies in Docker without
+      # the user needing to edit .env.
+      CORS_ORIGINS: '["http://localhost","http://localhost:80","http://localhost:8080"]'
+    restart: unless-stopped
+    # GPU passthrough — uncomment after running the setup below:
+    #   sudo apt-get install -y nvidia-container-toolkit
+    #   sudo nvidia-ctk runtime configure --runtime=docker
+    #   sudo systemctl restart docker
+    #   docker compose build --build-arg TORCH_BUILD_TYPE=cu121 api
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.ui
+    ports:
+      - "8080:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped

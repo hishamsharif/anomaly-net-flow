@@ -4,8 +4,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.config import settings
 from api.database import init_db
-from api.routers import predict, training, models_router, alerts, features
+from api.routers import predict, training, models_router, alerts, features, pipeline
 
 
 def _migrate_db_location_on_startup() -> None:
@@ -96,7 +97,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -106,6 +107,7 @@ app.include_router(training.router, prefix="/api")
 app.include_router(models_router.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
 app.include_router(features.router, prefix="/api")
+app.include_router(pipeline.router, prefix="/api")
 
 
 @app.get("/health")

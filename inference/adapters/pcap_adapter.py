@@ -1,66 +1,112 @@
 """
 PCAP → CIC-IDS2017-compatible feature DataFrame via NFStream.
 
-NFStream (https://www.nfstream.org) groups raw packets into bidirectional
-flows and computes the same statistical features as CICFlowMeter (the tool
-used to generate the CIC-IDS2017 dataset): duration, packet counts, byte
-rates, inter-arrival time statistics, flag counts, window sizes, etc.
+NFStream groups raw packets into bidirectional flows and computes the same
+statistical features as CICFlowMeter (the tool used to generate CIC-IDS2017):
+duration, packet counts, byte rates, IAT statistics, flag counts, window sizes.
 
-This adapter is inference-only. Extracted flows have no labels.
+This adapter is inference-only. Extracted flows carry no labels.
+
+Known limitation: five CICFlowMeter-specific features cannot be derived from
+NFStream and are always zero for PCAP inference — Active Mean/Std/Max/Min and
+Idle Std. These are computed by CICFlowMeter's activity-window algorithm which
+tracks idle gaps within a flow; NFStream has no equivalent. For short-lived
+attack flows (DoS, scans, brute-force) these features are near-zero anyway, so
+the practical impact on classifier accuracy is minimal.
 """
+import numpy as np
 import pandas as pd
 
-# NFStream column names → CIC-IDS2017 column names (best-effort mapping).
+# ── NFStream column → CIC-IDS2017 column ─────────────────────────────────────
 # NFStream uses snake_case; CIC-IDS2017 uses title-cased names with spaces.
-# Columns not in this map are passed through as-is (the model's VarianceThreshold
-# and imputation steps handle any extras or gaps).
+# Columns not listed here are passed through as-is; VarianceThreshold and
+# NaN-imputation in the model's feature-engineering pipeline handle any gaps.
 _RENAME: dict[str, str] = {
-    "dst_port":                         "Destination Port",
-    "bidirectional_duration_ms":        "Flow Duration",
-    "bidirectional_packets":            "Total Fwd Packets",
-    "src2dst_bytes":                    "Total Length of Fwd Packets",
-    "dst2src_bytes":                    "Total Length of Bwd Packets",
-    "src2dst_packets":                  "Total Fwd Packets",
-    "dst2src_packets":                  "Total Backward Packets",
-    "bidirectional_bytes":              "Flow Bytes/s",   # approximated below
-    "bidirectional_mean_ps":            "Average Packet Size",
-    "src2dst_mean_ps":                  "Avg Fwd Segment Size",
-    "dst2src_mean_ps":                  "Avg Bwd Segment Size",
-    "bidirectional_min_ps":             "Min Packet Length",
-    "bidirectional_max_ps":             "Max Packet Length",
-    "bidirectional_stddev_ps":          "Packet Length Std",
-    "src2dst_min_ms":                   "Fwd IAT Min",
-    "src2dst_max_ms":                   "Fwd IAT Max",
-    "src2dst_mean_ms":                  "Fwd IAT Mean",
-    "src2dst_stddev_ms":                "Fwd IAT Std",
-    "dst2src_min_ms":                   "Bwd IAT Min",
-    "dst2src_max_ms":                   "Bwd IAT Max",
-    "dst2src_mean_ms":                  "Bwd IAT Mean",
-    "dst2src_stddev_ms":                "Bwd IAT Std",
-    "bidirectional_min_ms":             "Flow IAT Min",
-    "bidirectional_max_ms":             "Flow IAT Max",
-    "bidirectional_mean_ms":            "Flow IAT Mean",
-    "bidirectional_stddev_ms":          "Flow IAT Std",
-    "bidirectional_syn_packets":        "SYN Flag Count",
-    "bidirectional_ack_packets":        "ACK Flag Count",
-    "bidirectional_fin_packets":        "FIN Flag Count",
-    "bidirectional_rst_packets":        "RST Flag Count",
-    "bidirectional_psh_packets":        "PSH Flag Count",
-    "bidirectional_urg_packets":        "URG Flag Count",
-    "src2dst_syn_packets":              "Fwd PSH Flags",
-    "src2dst_fin_packets":              "Fwd URG Flags",
-    "src2dst_rst_packets":              "Bwd PSH Flags",
-    "bidirectional_first_seen_ms":      "Flow Start",   # dropped before inference
-    "bidirectional_last_seen_ms":       "Flow End",     # dropped before inference
+    # Identifiers / flow metadata
+    "dst_port":                     "Destination Port",
+    "bidirectional_duration_ms":    "Flow Duration",
+
+    # Packet counts
+    "src2dst_packets":              "Total Fwd Packets",
+    "dst2src_packets":              "Total Backward Packets",
+
+    # Byte counts
+    "src2dst_bytes":                "Total Length of Fwd Packets",
+    "dst2src_bytes":                "Total Length of Bwd Packets",
+
+    # Packet size stats — bidirectional
+    "bidirectional_mean_ps":        "Average Packet Size",
+    "bidirectional_min_ps":         "Min Packet Length",
+    "bidirectional_max_ps":         "Max Packet Length",
+    "bidirectional_stddev_ps":      "Packet Length Std",
+
+    # Packet size stats — forward direction
+    "src2dst_max_ps":               "Fwd Packet Length Max",
+    "src2dst_min_ps":               "Fwd Packet Length Min",
+    "src2dst_mean_ps":              "Fwd Packet Length Mean",
+    "src2dst_stddev_ps":            "Fwd Packet Length Std",
+
+    # Packet size stats — backward direction
+    "dst2src_max_ps":               "Bwd Packet Length Max",
+    "dst2src_min_ps":               "Bwd Packet Length Min",
+    "dst2src_mean_ps":              "Bwd Packet Length Mean",
+    "dst2src_stddev_ps":            "Bwd Packet Length Std",
+
+    # IAT stats — forward direction
+    "src2dst_min_ms":               "Fwd IAT Min",
+    "src2dst_max_ms":               "Fwd IAT Max",
+    "src2dst_mean_ms":              "Fwd IAT Mean",
+    "src2dst_stddev_ms":            "Fwd IAT Std",
+
+    # IAT stats — backward direction
+    "dst2src_min_ms":               "Bwd IAT Min",
+    "dst2src_max_ms":               "Bwd IAT Max",
+    "dst2src_mean_ms":              "Bwd IAT Mean",
+    "dst2src_stddev_ms":            "Bwd IAT Std",
+
+    # IAT stats — bidirectional
+    "bidirectional_min_ms":         "Flow IAT Min",
+    "bidirectional_max_ms":         "Flow IAT Max",
+    "bidirectional_mean_ms":        "Flow IAT Mean",
+    "bidirectional_stddev_ms":      "Flow IAT Std",
+
+    # TCP flags — bidirectional totals
+    "bidirectional_fin_packets":    "FIN Flag Count",
+    "bidirectional_syn_packets":    "SYN Flag Count",
+    "bidirectional_rst_packets":    "RST Flag Count",
+    "bidirectional_psh_packets":    "PSH Flag Count",
+    "bidirectional_ack_packets":    "ACK Flag Count",
+    "bidirectional_urg_packets":    "URG Flag Count",
+    "bidirectional_cwr_packets":    "CWE Flag Count",
+    "bidirectional_ece_packets":    "ECE Flag Count",
+
+    # TCP flags — per direction
+    "src2dst_psh_packets":          "Fwd PSH Flags",
+    "src2dst_urg_packets":          "Fwd URG Flags",
+    "dst2src_psh_packets":          "Bwd PSH Flags",
+    "dst2src_urg_packets":          "Bwd URG Flags",
+
+    # TCP initial window sizes (first SYN/SYN-ACK window advertisement)
+    "src2dst_init_win_bytes":       "Init_Win_bytes_forward",
+    "dst2src_init_win_bytes":       "Init_Win_bytes_backward",
+
+    # Data-bearing packets in fwd direction (TCP payload > 0)
+    "src2dst_data_packets":         "act_data_pkt_fwd",
+
+    # Flow anchors — kept temporarily for derivation, dropped before return
+    "bidirectional_first_seen_ms":  "Flow Start",
+    "bidirectional_last_seen_ms":   "Flow End",
 }
 
-# Columns that carry no predictive signal for the model (identifiers / timing anchors)
-_DROP = {"id", "src_ip", "dst_ip", "src_port", "src_mac", "dst_mac",
-         "ip_version", "vlan_id", "tunnel_id", "application_name",
-         "application_category_name", "application_is_guessed",
-         "requested_server_name", "client_fingerprint", "server_fingerprint",
-         "user_agent", "content_type", "expiration_id",
-         "Flow Start", "Flow End"}
+# Columns that carry no predictive signal (identifiers, DPI metadata, anchors)
+_DROP = {
+    "id", "src_ip", "dst_ip", "src_port", "src_mac", "dst_mac",
+    "ip_version", "vlan_id", "tunnel_id",
+    "application_name", "application_category_name", "application_is_guessed",
+    "requested_server_name", "client_fingerprint", "server_fingerprint",
+    "user_agent", "content_type", "expiration_id",
+    "Flow Start", "Flow End",
+}
 
 
 class PcapAdapter:
@@ -80,31 +126,68 @@ class PcapAdapter:
 
         streamer = NFStreamer(
             source=path,
-            statistical_analysis=True,   # compute IAT/byte/packet stats
-            splt_analysis=0,             # disable per-packet deep inspection (not needed)
-            n_dissections=20,            # DPI for application-layer metadata
+            statistical_analysis=True,
+            splt_analysis=0,
+            n_dissections=20,
         )
         df = streamer.to_pandas()
 
         if df.empty:
             return df
 
-        # Rename to CIC-IDS2017 column names where known
+        # 1. Rename NFStream columns to CIC-IDS2017 names
         df = df.rename(columns=_RENAME)
 
-        # Derive Flow Bytes/s from bytes and duration (NFStream gives total bytes)
-        if "Flow Duration" in df.columns and "bidirectional_bytes" not in df.columns:
-            if "Total Length of Fwd Packets" in df.columns and "Total Length of Bwd Packets" in df.columns:
-                total_bytes = df["Total Length of Fwd Packets"].fillna(0) + df["Total Length of Bwd Packets"].fillna(0)
-                duration_s = df["Flow Duration"].replace(0, 1) / 1000.0  # ms → s
-                df["Flow Bytes/s"] = total_bytes / duration_s
-                df["Flow Packets/s"] = df.get("Total Fwd Packets", 0) / duration_s
+        # 2. Derive features that CICFlowMeter computes but NFStream names differently
+        #    or that must be calculated from available columns.
+        duration_s = (
+            df["Flow Duration"].replace(0, 1) / 1000.0
+            if "Flow Duration" in df.columns else pd.Series(1.0, index=df.index)
+        )
 
-        # Drop identifier / non-feature columns
-        drop_cols = [c for c in df.columns if c in _DROP]
-        df = df.drop(columns=drop_cols, errors="ignore")
+        # Byte / packet rates
+        if "Total Length of Fwd Packets" in df.columns and "Total Length of Bwd Packets" in df.columns:
+            total_bytes = df["Total Length of Fwd Packets"].fillna(0) + df["Total Length of Bwd Packets"].fillna(0)
+            df["Flow Bytes/s"] = total_bytes / duration_s
 
-        # Coerce all remaining columns to numeric; non-numeric → NaN
+        if "Total Fwd Packets" in df.columns and "Total Backward Packets" in df.columns:
+            total_pkts = df["Total Fwd Packets"].fillna(0) + df["Total Backward Packets"].fillna(0)
+            df["Flow Packets/s"] = total_pkts / duration_s
+            df["Fwd Packets/s"]  = df["Total Fwd Packets"].fillna(0) / duration_s
+            df["Bwd Packets/s"]  = df["Total Backward Packets"].fillna(0) / duration_s
+
+        # Packet length aliases — CIC-IDS2017 has redundant columns with different names
+        # for the same underlying value.
+        if "Average Packet Size" in df.columns:
+            df["Packet Length Mean"] = df["Average Packet Size"]
+        if "Fwd Packet Length Mean" in df.columns:
+            df["Avg Fwd Segment Size"] = df["Fwd Packet Length Mean"]
+        if "Bwd Packet Length Mean" in df.columns:
+            df["Avg Bwd Segment Size"] = df["Bwd Packet Length Mean"]
+
+        # Packet Length Variance = Std²
+        if "Packet Length Std" in df.columns:
+            df["Packet Length Variance"] = df["Packet Length Std"] ** 2
+
+        # IAT totals — approximated as mean × count (exact value requires per-packet data)
+        if "Fwd IAT Mean" in df.columns and "Total Fwd Packets" in df.columns:
+            df["Fwd IAT Total"] = df["Fwd IAT Mean"] * df["Total Fwd Packets"].fillna(0)
+        if "Bwd IAT Mean" in df.columns and "Total Backward Packets" in df.columns:
+            df["Bwd IAT Total"] = df["Bwd IAT Mean"] * df["Total Backward Packets"].fillna(0)
+
+        # Download/upload ratio
+        if "Total Length of Bwd Packets" in df.columns and "Total Length of Fwd Packets" in df.columns:
+            fwd_nonzero = df["Total Length of Fwd Packets"].replace(0, np.nan)
+            df["Down/Up Ratio"] = df["Total Length of Bwd Packets"] / fwd_nonzero
+
+        # min_seg_size_forward — CICFlowMeter's name for the minimum forward packet length
+        if "Fwd Packet Length Min" in df.columns:
+            df["min_seg_size_forward"] = df["Fwd Packet Length Min"]
+
+        # 3. Drop identifier / non-feature columns
+        df = df.drop(columns=[c for c in df.columns if c in _DROP], errors="ignore")
+
+        # 4. Coerce everything to numeric; non-parseable cells become NaN
         df = df.apply(pd.to_numeric, errors="coerce")
 
         return df

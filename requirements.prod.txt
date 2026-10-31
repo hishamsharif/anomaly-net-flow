@@ -1,0 +1,34 @@
+# Production dependencies — CPU-only PyTorch to keep the Docker image lean (~700 MB vs ~2 GB).
+# Generated from requirements.txt; do not add torch here — it is installed separately below.
+
+# API
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+pydantic-settings>=2.3.0
+python-multipart>=0.0.9
+
+# Database
+sqlalchemy[asyncio]>=2.0.0
+aiosqlite>=0.20.0
+duckdb>=1.0.0
+
+# ML (non-torch)
+xgboost>=2.0.0
+scikit-learn>=1.5.0
+imbalanced-learn>=0.12.0
+joblib>=1.4.0
+numpy>=1.26.0
+pandas>=2.2.0
+
+# Async tasks
+anyio>=4.4.0
+
+# Inference adapters
+nfstream>=6.5.0
+
+# Dataset download (used by data download script)
+gdown>=5.1.0
+
+# CPU-only PyTorch — must be installed via its own index URL (see Dockerfile.api).
+# Do NOT add torch here; the Dockerfile handles it separately to pick the CPU wheel.

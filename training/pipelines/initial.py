@@ -7,7 +7,7 @@ detector, saves versioned artefacts, returns metrics.
 Feature engineering (stages 1-3 shared; stage 4 per-model-path):
   1. VarianceThreshold   — drop near-constant features
   2. Correlation pruning — drop one from each highly-correlated pair
-  3. SelectKBest (MI)    — optional: keep top-K by mutual information
+  3. Feature selection   — optional: mi (SelectKBest) | rfe (RF-RFE) | none
   4a. clf_scaler         — determined by classifier PreprocessingSpec
   4b. det_scaler         — determined by detector PreprocessingSpec
 """
@@ -23,7 +23,6 @@ import pandas as pd
 from imblearn.over_sampling import SMOTE
 from sklearn.metrics import classification_report, confusion_matrix
 
-from training.data_loader import load_initial
 from training.feature_eng.pipeline import FeatureEngineeringPipeline
 
 _META_COLS = {"Label", "Flow ID", "Timestamp", "Source IP", "Destination IP"}
@@ -49,48 +48,54 @@ def run(
     from api.config import settings as cfg
     from core.registry import get_classifier, get_detector
 
-    # 1. Load dataset
-    progress("Loading CIC-IDS2017 CSV files ...")
-    df = load_initial(bundled_dir)
-    label_col = next((c for c in df.columns if c.strip() == "Label"), None)
+    # 1-3. Load dataset with strict day-based split:
+    #   Mon-Thu  → train  (all non-Friday files)
+    #   Fri-AM   → val    (Friday WorkingHours Morning)
+    #   Fri-PM   → test   (Friday WorkingHours Afternoon: DDos + PortScan)
+    progress(
+        "Loading CIC-IDS2017 CSV files "
+        "(day split: Mon-Thu → train | Fri-AM → val | Fri-PM → test) ..."
+    )
+    from training.data_loader import load_initial_by_day
+    df_train, df_val, df_test = load_initial_by_day(bundled_dir)
+
+    label_col = next((c for c in df_train.columns if c.strip() == "Label"), None)
     if label_col is None:
         raise ValueError("CIC-IDS2017 CSV must contain a 'Label' column.")
 
-    # 2. Sort by Timestamp for day-based ordering
-    ts_col = next((c for c in df.columns if c.strip() == "Timestamp"), None)
-    if ts_col:
-        df = df.sort_values(ts_col)
+    feature_cols = [c for c in df_train.columns if c not in _META_COLS and c != label_col]
 
-    labels = df[label_col].str.strip()
-    feature_cols = [c for c in df.columns if c not in _META_COLS and c != label_col]
-    X_raw = (
-        df[feature_cols]
-        .apply(pd.to_numeric, errors="coerce")
-        .fillna(0)
-        .replace([np.inf, -np.inf], 0)
+    def _to_matrix(df: pd.DataFrame) -> np.ndarray:
+        return (
+            df[feature_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .fillna(0)
+            .replace([np.inf, -np.inf], 0)
+            .values
+        )
+
+    X_train_raw = _to_matrix(df_train)
+    X_val_raw   = _to_matrix(df_val)
+    X_test_raw  = _to_matrix(df_test)
+    y_train = df_train[label_col].str.strip().values
+    y_val   = df_val[label_col].str.strip().values
+    y_test  = df_test[label_col].str.strip().values
+
+    progress(
+        f"Split — train: {len(X_train_raw):,} rows | "
+        f"val: {len(X_val_raw):,} rows | test: {len(X_test_raw):,} rows"
     )
-
-    # 3. Time-ordered 80/10/10 split
-    progress(f"Splitting {len(X_raw):,} rows (80% train / 10% val / 10% test) ...")
-    n = len(X_raw)
-    train_end, val_end = int(n * 0.8), int(n * 0.9)
-
-    X_train_raw = X_raw.iloc[:train_end].values
-    y_train     = labels.iloc[:train_end].values
-    X_val_raw   = X_raw.iloc[train_end:val_end].values
-    y_val       = labels.iloc[train_end:val_end].values
-    X_test_raw  = X_raw.iloc[val_end:].values
-    y_test      = labels.iloc[val_end:].values
 
     # 4. Feature engineering stages 1-3 (shared across all paths)
     fe = FeatureEngineeringPipeline(
         variance_threshold=cfg.variance_threshold,
         correlation_threshold=cfg.correlation_threshold,
         feature_selection_k=cfg.feature_selection_k,
+        feature_selection_method=getattr(cfg, "feature_selection_method", "mi"),
     )
     fe_result = fe.fit_transform(
         X_train_raw, X_val_raw, X_test_raw,
-        y_train, list(X_raw.columns),
+        y_train, feature_cols,
         on_progress=progress,
     )
 
@@ -153,37 +158,47 @@ def run(
         y_pred   = list(raw_pred)
         y_scores = None
     metrics = _compute_metrics(y_test, y_pred, y_scores)
-    # Known-attack F1: only test rows whose true class was seen in training.
-    # Novel attacks (not in training) get F1=0 in the macro avg — masking them
-    # gives a fairer picture of how well the classifier handles known attacks.
+    # Known-attack F1: only test rows whose true class is a NON-BENIGN class seen
+    # in training.  BENIGN is excluded because when the test set contains few
+    # attack rows, including BENIGN would make sklearn dilute the macro F1 across
+    # every class that appears in y_pred (most with F1=0), masking classifier quality.
     trained_classes = set(clf.classes_) if hasattr(clf, "classes_") else set()
-    known_mask = np.array([label in trained_classes for label in y_test])
-    if known_mask.sum() > 0:
+    trained_attack_classes = trained_classes - {"BENIGN"}
+    attack_known_mask = np.array([label in trained_attack_classes for label in y_test])
+    if attack_known_mask.sum() > 0:
         km = _compute_metrics(
-            np.array(y_test)[known_mask],
-            np.array(y_pred)[known_mask],
-            y_scores[known_mask] if y_scores is not None else None,
+            np.array(y_test)[attack_known_mask],
+            np.array(y_pred)[attack_known_mask],
+            y_scores[attack_known_mask] if y_scores is not None else None,
         )
         metrics["known_attack_f1"] = km["f1"]
     else:
         metrics["known_attack_f1"] = 0.0
+        progress(
+            "NOTE: no trained attack classes present in test set — "
+            "known_attack_f1=0 (expected when all Friday attacks are novel)."
+        )
     progress(
         f"Test  F1(macro)={metrics['f1']:.4f}  "
         f"F1(known-attacks)={metrics['known_attack_f1']:.4f}  "
         f"FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}"
     )
 
-    # 9. Train anomaly detector on benign flows only
+    # 9. Train anomaly detector on benign flows only.
+    # Threshold is set on validation benign rows (not training rows) so it reflects
+    # out-of-sample reconstruction error, giving a calibrated FAR floor.
     progress(f"Training {detector_type} anomaly detector on benign flows ...")
     X_benign_train = X_det_tr[y_train == "BENIGN"]
-    if detector_type == "mlp_ae":
+    X_benign_val   = X_det_v[y_val == "BENIGN"]
+    if detector_type in ("mlp_ae", "transfer_ae"):
         det = det_cls(
             anomaly_threshold_percentile=getattr(cfg, "ae_anomaly_threshold_percentile", 95.0),
             freeze_epochs=getattr(cfg, "ae_freeze_epochs", 5),
         )
+        det.fit(X_benign_train, X_benign_val=X_benign_val, on_progress=progress)
     else:
         det = det_cls()
-    det.fit(X_benign_train)
+        det.fit(X_benign_train)
 
     # 10. Log top-20 feature importances
     importances = clf.feature_importances() if hasattr(clf, "feature_importances") else None
@@ -201,21 +216,44 @@ def run(
     FeatureEngineeringPipeline.save_artefacts(fe_result, artefact_dir)
 
     completed_at = time.time()
+
+    # Feature importances for top-15 display in the UI
+    importances_full = clf.feature_importances() if hasattr(clf, "feature_importances") else None
+    top_features: list[dict] = []
+    if importances_full is not None and len(importances_full) == len(sel_names):
+        top_idx = np.argsort(importances_full)[::-1][:15]
+        top_features = [
+            {"name": sel_names[i], "importance": float(importances_full[i])}
+            for i in top_idx
+        ]
+
     metadata = {
-        "feature_names":          list(X_raw.columns),
+        "classifier_type":        classifier_type,
+        "detector_type":          detector_type,
+        "feature_names":          list(feature_cols),
         "selected_feature_names": sel_names,
         "n_features_initial":     fe_result.n_initial,
+        "n_features_after_vt":    fe_result.n_after_vt,
+        "n_features_after_corr":  fe_result.n_after_corr,
         "n_features_final":       fe_result.n_final,
+        "top_features":           top_features,
         "classes":                list(clf.classes_) if hasattr(clf, "classes_") else [],
+        "class_distribution_train": {k: int(v) for k, v in counts.items()},
         "ae_threshold":           float(det.threshold) if hasattr(det, "threshold") else None,
+        "train_rows_raw":         int(len(X_clf_tr)),
         "train_rows":             int(len(X_clf_bal)),
         "val_rows":               int(len(X_clf_v)),
         "test_rows":              int(len(X_clf_te)),
+        "smote_before_total":     int(len(X_clf_tr)),
+        "smote_after_total":      int(len(X_clf_bal)),
+        "smote_n_minority":       int(n_minority),
+        "smote_target_per_class": int(target),
         "clf_scaler_type":        clf_scaler_type,
         "det_scaler_type":        det_scaler_type,
-        "variance_threshold":     cfg.variance_threshold,
-        "correlation_threshold":  cfg.correlation_threshold,
-        "feature_selection_k":    cfg.feature_selection_k,
+        "variance_threshold":        cfg.variance_threshold,
+        "correlation_threshold":     cfg.correlation_threshold,
+        "feature_selection_k":       cfg.feature_selection_k,
+        "feature_selection_method":  fe_result.selection_method,
         "smote_max_per_class":    smote_cap,
         "started_at":             started_at,
         "completed_at":           completed_at,

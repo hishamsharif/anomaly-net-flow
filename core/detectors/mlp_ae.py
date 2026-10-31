@@ -9,6 +9,7 @@ dependency on the API config layer — it can be used standalone in tests or
 batch scripts without importing the web framework.
 """
 from __future__ import annotations
+from typing import Callable
 import joblib
 import numpy as np
 import torch
@@ -75,22 +76,33 @@ class MLPAutoencoder:
     def _device() -> "torch.device":
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    def fit(self, X_benign: np.ndarray) -> None:
+    def fit(self, X_benign: np.ndarray,
+            X_benign_val: np.ndarray | None = None,
+            on_progress: Callable[[str], None] | None = None) -> None:
+        """
+        Train on X_benign (benign training flows).
+        If X_benign_val is supplied the anomaly threshold is calibrated on those
+        out-of-sample rows; otherwise training rows are used as fallback.
+        Using validation rows gives a calibrated FAR — training reconstruction
+        error is lower than val/test error because the model was optimised on it.
+        """
         self.input_dim = X_benign.shape[1]
         self._net = _AENet(self.input_dim, self.hidden_dims).to(self._device())
-        self._train(X_benign, freeze_encoder_epochs=0)
+        self._train(X_benign, freeze_encoder_epochs=0, on_progress=on_progress)
+        threshold_data = X_benign_val if X_benign_val is not None else X_benign
         self.threshold = float(
-            np.percentile(self._reconstruction_errors(X_benign),
+            np.percentile(self._reconstruction_errors(threshold_data),
                           self.anomaly_threshold_percentile)
         )
 
     def fine_tune(self, X_incremental: np.ndarray,
-                  X_replay: np.ndarray | None = None) -> None:
+                  X_replay: np.ndarray | None = None,
+                  on_progress: Callable[[str], None] | None = None) -> None:
         if self._net is None:
             raise RuntimeError("Call fit() or load() before fine_tune().")
         self._net = self._net.to(self._device())
         X = np.vstack([X_incremental, X_replay]) if X_replay is not None else X_incremental
-        self._train(X, freeze_encoder_epochs=self.freeze_epochs)
+        self._train(X, freeze_encoder_epochs=self.freeze_epochs, on_progress=on_progress)
         self.threshold = float(
             np.percentile(self._reconstruction_errors(X_incremental),
                           self.anomaly_threshold_percentile)
@@ -113,11 +125,16 @@ class MLPAutoencoder:
             recon = self._net(t).cpu().numpy()
         return ((x.reshape(1, -1) - recon) ** 2).flatten()
 
+    def score_batch(self, X: np.ndarray) -> np.ndarray:
+        """Reconstruction error for each row in X (batch-efficient version of score)."""
+        return self._reconstruction_errors(X)
+
     def is_anomaly(self, x: np.ndarray) -> tuple[bool, float]:
         s = self.score(x)
         return s > (self.threshold or 0.0), s
 
-    def _train(self, X: np.ndarray, freeze_encoder_epochs: int) -> None:
+    def _train(self, X: np.ndarray, freeze_encoder_epochs: int,
+               on_progress: Callable[[str], None] | None = None) -> None:
         device = self._device()
         net = self._net.to(device)
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
@@ -125,17 +142,29 @@ class MLPAutoencoder:
         tensor = torch.tensor(X, dtype=torch.float32)
         loader = DataLoader(TensorDataset(tensor), batch_size=self.batch_size,
                             shuffle=True)
+        report_every = max(1, self.epochs // 5)  # ~5 progress updates total
         for epoch in range(self.epochs):
             frozen = freeze_encoder_epochs and epoch < freeze_encoder_epochs
             for p in net.encoder.parameters():
                 p.requires_grad = not frozen
             net.train()
+            epoch_loss = 0.0
+            n_batches = 0
             for (batch,) in loader:
                 batch = batch.to(device)
                 optimizer.zero_grad()
                 loss = criterion(net(batch), batch)
                 loss.backward()
                 optimizer.step()
+                epoch_loss += loss.item()
+                n_batches += 1
+            if on_progress and (epoch + 1) % report_every == 0:
+                avg_loss = epoch_loss / n_batches if n_batches else 0.0
+                on_progress(
+                    f"  AE epoch {epoch + 1}/{self.epochs}  "
+                    f"loss={avg_loss:.6f}"
+                    + ("  [encoder frozen]" if frozen else "")
+                )
 
     def _reconstruction_errors(self, X: np.ndarray) -> np.ndarray:
         device = self._device()

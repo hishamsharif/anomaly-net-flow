@@ -176,14 +176,42 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
         sp = create_savepoint(db, version_id, 0, result.get("train_rows", 0))
 
         metrics = {
+            # Core evaluation metrics
             "f1": result["f1"],
             "far": result["far"],
             "amr": result["amr"],
+            "recall": result.get("recall"),
+            "pr_auc": result.get("pr_auc"),
             "known_attack_f1": result.get("known_attack_f1", 0.0),
+            # Split sizes
+            "train_rows_raw": result.get("train_rows_raw", result.get("train_rows", 0)),
             "train_rows": result.get("train_rows", 0),
             "val_rows": result.get("val_rows", 0),
             "test_rows": result.get("test_rows", 0),
+            # Detector threshold
             "ae_threshold": result.get("ae_threshold"),
+            # Feature engineering funnel
+            "n_features_initial": result.get("n_features_initial"),
+            "n_features_after_vt": result.get("n_features_after_vt"),
+            "n_features_after_corr": result.get("n_features_after_corr"),
+            "n_features_final": result.get("n_features_final"),
+            "variance_threshold": result.get("variance_threshold"),
+            "correlation_threshold": result.get("correlation_threshold"),
+            "feature_selection_k": result.get("feature_selection_k"),
+            "feature_selection_method": result.get("feature_selection_method"),
+            "clf_scaler_type": result.get("clf_scaler_type"),
+            "det_scaler_type": result.get("det_scaler_type"),
+            # SMOTE stats
+            "smote_before_total": result.get("smote_before_total"),
+            "smote_after_total": result.get("smote_after_total"),
+            "smote_n_minority": result.get("smote_n_minority"),
+            "smote_target_per_class": result.get("smote_target_per_class"),
+            # Top features for UI display
+            "top_features": result.get("top_features", []),
+            "selected_feature_names": result.get("selected_feature_names", []),
+            "classes": result.get("classes", []),
+            "class_distribution_train": result.get("class_distribution_train", {}),
+            # Timing
             "training_duration_s": result.get("training_duration_s"),
             "savepoint_id": sp.id,
         }
@@ -271,12 +299,33 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
         sp = create_savepoint(db, version_id, new_max_id, result.get("cumulative_rows", 0))
 
         metrics = {
+            # Core evaluation metrics
             "f1": result["f1"],
             "far": result["far"],
             "amr": result["amr"],
+            "recall": result.get("recall"),
+            "pr_auc": result.get("pr_auc"),
+            "known_attack_f1": result.get("known_attack_f1", 0.0),
+            # Fine-tune row counts
             "cumulative_rows": result.get("cumulative_rows", 0),
             "incremental_rows": result.get("incremental_rows", 0),
+            # Detector threshold
             "ae_threshold": result.get("ae_threshold"),
+            # Feature engineering funnel (carried over from fine-tune artefacts)
+            "n_features_initial": result.get("n_features_initial"),
+            "n_features_after_vt": result.get("n_features_after_vt"),
+            "n_features_after_corr": result.get("n_features_after_corr"),
+            "n_features_final": result.get("n_features_final"),
+            "feature_selection_k": result.get("feature_selection_k"),
+            "feature_selection_method": result.get("feature_selection_method"),
+            "clf_scaler_type": result.get("clf_scaler_type"),
+            "det_scaler_type": result.get("det_scaler_type"),
+            # Top features
+            "top_features": result.get("top_features", []),
+            "selected_feature_names": result.get("selected_feature_names", []),
+            "classes": result.get("classes", []),
+            # Timing
+            "training_duration_s": result.get("training_duration_s"),
             "savepoint_id": sp.id,
             "prev_version_id": prev_mv.id,
         }

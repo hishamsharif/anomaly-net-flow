@@ -1,0 +1,49 @@
+FROM python:3.12-slim
+
+WORKDIR /app
+
+# Inject the host system CA bundle so the corporate SSL proxy cert is trusted
+# inside the container. This lets pip reach download.pytorch.org without
+# disabling certificate verification entirely.
+COPY certs/corp-ca.crt /usr/local/share/ca-certificates/corp-proxy.crt
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# libpcap-dev: required by nfstream (PCAP flow extraction, C-backed)
+# libgomp1:    required by XGBoost (OpenMP thread pool)
+# curl:        required by Docker HEALTHCHECK
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpcap-dev \
+        libgomp1 \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install all non-torch dependencies first (cached layer unless requirements change)
+COPY requirements.prod.txt .
+RUN pip install --no-cache-dir -r requirements.prod.txt
+
+# PyTorch — TORCH_BUILD_TYPE selects the wheel index at build time.
+#   cpu    (default) — ~700 MB, no GPU required
+#   cu121            — ~2.5 GB, requires nvidia-container-toolkit + GPU device in docker-compose
+# To build the CUDA image: docker compose build --build-arg TORCH_BUILD_TYPE=cu121 api
+ARG TORCH_BUILD_TYPE=cpu
+RUN pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/${TORCH_BUILD_TYPE} \
+        --timeout 600 \
+        --retries 5 \
+        "torch>=2.3.0"
+
+# Copy application source (data/ and models/ are bind-mounted at runtime)
+COPY api/       api/
+COPY core/      core/
+COPY inference/ inference/
+COPY training/  training/
+COPY scripts/   scripts/
+
+# Create mount-point directories so Docker does not create them as root-owned
+RUN mkdir -p data models
+
+EXPOSE 8000
+
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

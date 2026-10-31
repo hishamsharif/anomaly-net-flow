@@ -56,6 +56,70 @@ def load_initial(bundled_dir: str) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True)
 
 
+def _split_group(path: str) -> str:
+    """
+    Assign a CIC-IDS2017 CSV to a split group.
+    - Non-Friday files → 'train'
+    - Friday morning   → 'val'
+    - Friday afternoon → 'test'
+    """
+    import os
+    name = os.path.basename(path).lower()
+    if "friday" not in name:
+        return "train"
+    if "morning" in name:
+        return "val"
+    return "test"
+
+
+def load_initial_by_day(
+    bundled_dir: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Load CIC-IDS2017 CSVs using a strict day-boundary split:
+      train → Mon, Tue, Wed, Thu (all non-Friday files)
+      val   → Friday WorkingHours Morning
+      test  → Friday WorkingHours Afternoon (DDos + PortScan)
+
+    Returns (train_df, val_df, test_df).
+    """
+    import glob
+    import os
+
+    paths = glob.glob(os.path.join(bundled_dir, "**/*.csv"), recursive=True)
+    if not paths:
+        raise FileNotFoundError(f"No CSV files found in {bundled_dir}")
+
+    groups: dict[str, list[str]] = {"train": [], "val": [], "test": []}
+    for p in paths:
+        groups[_split_group(p)].append(p)
+
+    if not groups["val"]:
+        raise FileNotFoundError(
+            f"No Friday-Morning CSV found in {bundled_dir}. "
+            "Expected a file whose name contains both 'Friday' and 'Morning'."
+        )
+    if not groups["test"]:
+        raise FileNotFoundError(
+            f"No Friday-Afternoon CSV found in {bundled_dir}. "
+            "Expected files whose names contain 'Friday' but not 'Morning'."
+        )
+
+    conn = duckdb.connect(":memory:")
+
+    def _load_group(file_paths: list[str]) -> pd.DataFrame:
+        sorted_paths = _sort_csvs_by_day(file_paths)
+        dfs = [conn.execute(f"SELECT * FROM read_csv_auto('{p}')").df()
+               for p in sorted_paths]
+        return pd.concat(dfs, ignore_index=True)
+
+    train_df = _load_group(groups["train"])
+    val_df   = _load_group(groups["val"])
+    test_df  = _load_group(groups["test"])
+    conn.close()
+    return train_df, val_df, test_df
+
+
 def load_cumulative(max_flow_id: int) -> pd.DataFrame:
     """XGBoost: all labelled_flows rows up to the savepoint."""
     conn = _conn()

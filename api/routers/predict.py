@@ -1,11 +1,15 @@
-import io
 import os
 import tempfile
+import uuid
+
+import numpy as np
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.database import get_db
 from api.config import settings
+from api.db.models import Alert
+from core.store import model_store
 
 router = APIRouter(prefix="/predict", tags=["inference"])
 
@@ -14,6 +18,31 @@ _ADAPTER_MAP = {
     ".pcap": "pcap",
     ".pcapng": "pcap",
 }
+
+_SEVERITY: dict[str, str] = {
+    "SAFE": "info",
+    "KNOWN_ATTACK": "high",
+    "NOVEL_ATTACK": "critical",
+}
+
+
+def _rule_verdict(row) -> str:
+    """Stage 1: lightweight heuristics. Returns 'BENIGN' (skip AI) or 'PASS' (proceed)."""
+    dst = row.get("Destination Port", -1)
+    dur = row.get("Flow Duration", 0)
+    pkts = row.get("Total Fwd Packets", 0)
+    # Trusted: loopback DNS/DHCP, single-packet, sub-100ms — almost certainly not an attack
+    if dst in (53, 67, 68) and pkts <= 1 and dur < 100:
+        return "BENIGN"
+    return "PASS"
+
+
+def _consensus(clf_label: str, clf_conf: float, is_anom: bool) -> str:
+    if clf_label != "BENIGN" and clf_conf >= 0.6:
+        return "KNOWN_ATTACK"
+    if is_anom:
+        return "NOVEL_ATTACK"
+    return "SAFE"
 
 
 @router.post("/batch")
@@ -30,7 +59,6 @@ async def predict_batch(
     if len(raw) > settings.max_upload_mb * 1024 * 1024:
         raise HTTPException(413, f"File exceeds {settings.max_upload_mb} MB limit")
 
-    # Write to temp file (PcapAdapter needs a path; CSVAdapter uses StringIO)
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         tmp.write(raw)
         tmp_path = tmp.name
@@ -48,7 +76,85 @@ async def predict_batch(
     if df.empty:
         raise HTTPException(422, "No flows could be extracted from the uploaded file")
 
-    # TODO: run 3-stage pipeline over df rows, insert alerts, return results
-    return {"total": len(df), "message": "Inference pipeline not yet wired — stub"}
+    model = model_store.get()
+    if model is None:
+        raise HTTPException(503, "No trained model loaded — run initial training first")
 
+    # Align to model's raw feature list, filling any gaps with 0
+    for col in model.feature_names:
+        if col not in df.columns:
+            df[col] = 0.0
+    X_raw = df[model.feature_names].fillna(0).values.astype(np.float32)
 
+    # Stage 2 — supervised classifier (batch)
+    X_clf = model.preprocess_clf(X_raw)
+    clf_results: list[tuple[str, float]] = model.classifier.predict(X_clf)
+
+    # Stage 3 — anomaly detector (batch-efficient)
+    X_det = model.preprocess_det(X_raw)
+    detector = model.detector
+    if hasattr(detector, "score_batch"):
+        ae_scores: np.ndarray = detector.score_batch(X_det)
+        threshold = getattr(detector, "threshold", 0.0) or 0.0
+        anomaly_flags = (ae_scores > threshold).tolist()
+    else:
+        # Fallback for detectors that only implement the single-row interface
+        pairs = [detector.is_anomaly(X_det[i]) for i in range(len(X_det))]
+        anomaly_flags = [p[0] for p in pairs]
+        ae_scores = np.array([p[1] for p in pairs])
+
+    db_alerts: list[Alert] = []
+    response_alerts: list[dict] = []
+    summary: dict[str, int] = {}
+
+    for i, (clf_label, clf_conf) in enumerate(clf_results):
+        # Stage 1 — rule engine
+        rule = _rule_verdict(df.iloc[i])
+        ai_skipped = rule == "BENIGN"
+
+        if ai_skipped:
+            consensus = "SAFE"
+            pred_label = None
+            conf_val = None
+            ae_val = None
+        else:
+            is_anom = bool(anomaly_flags[i])
+            consensus = _consensus(clf_label, float(clf_conf), is_anom)
+            pred_label = clf_label
+            conf_val = float(clf_conf)
+            ae_val = float(ae_scores[i])
+
+        severity = _SEVERITY[consensus]
+        flow_id = str(uuid.uuid4())
+
+        db_alerts.append(Alert(
+            flow_id=flow_id,
+            consensus=consensus,
+            severity=severity,
+            rule_verdict=rule,
+            predicted_label=pred_label,
+            classifier_confidence=conf_val,
+            ae_score=ae_val,
+            ai_skipped=ai_skipped,
+            model_version_id=model.version_id,
+        ))
+        response_alerts.append({
+            "flow_id": flow_id,
+            "consensus": consensus,
+            "severity": severity,
+            "predicted_label": pred_label,
+            "classifier_confidence": conf_val,
+            "ae_score": ae_val,
+            "ai_skipped": ai_skipped,
+        })
+        summary[consensus] = summary.get(consensus, 0) + 1
+
+    db.add_all(db_alerts)
+    await db.commit()
+
+    return {
+        "total": len(response_alerts),
+        "model_version_id": model.version_id,
+        "summary": summary,
+        "alerts": response_alerts,
+    }

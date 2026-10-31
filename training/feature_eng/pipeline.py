@@ -4,21 +4,27 @@ FeatureEngineeringPipeline — reusable 4-stage feature engineering pipeline.
 Stages (all fitted on the train split, applied to val/test):
   1. VarianceThreshold  — drop near-constant features
   2. Correlation pruning — drop one from each highly-correlated pair
-  3. MISelection (opt)  — keep top-K by mutual information with label
-  4. Scaler (per-path)  — separate scalers for classifier and detector paths
+  3. Feature selection (opt) — keep top-K features; method = mi | rfe
+       mi  (default) — SelectKBest ranked by mutual information with the label
+       rfe           — Recursive Feature Elimination driven by Random Forest
+                       importances. Accounts for feature interactions; literature
+                       reports 80 → 20 features with no F1 loss on CIC-IDS2017.
+  4. Scaler (per-path) — separate scalers for classifier and detector paths
 
 The pipeline is serialised alongside the model artefacts so the same
 transformation is applied identically at inference time.
 """
 from __future__ import annotations
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestClassifier as _RFC
 from sklearn.feature_selection import (
+    RFE,
     SelectKBest,
     VarianceThreshold,
     mutual_info_classif,
@@ -57,14 +63,16 @@ class FEResult:
     # Fitted artefacts for serialisation
     vt:               VarianceThreshold
     corr_mask:        np.ndarray     # bool mask applied after VT
-    feature_selector: Any            # SelectKBest | None
+    feature_selector: Any            # SelectKBest | RFE | None
     # Human-readable names at each stage
     feature_names_selected: list[str]
     # Summary counters
-    n_initial:  int
-    n_after_vt: int
+    n_initial:    int
+    n_after_vt:   int
     n_after_corr: int
-    n_final:    int
+    n_final:      int
+    # Selection method used (recorded for metrics / reporting)
+    selection_method: str = "none"
 
 
 class FeatureEngineeringPipeline:
@@ -73,15 +81,24 @@ class FeatureEngineeringPipeline:
     All state lives in FEResult; serialise with save_artefacts().
     """
 
+    VALID_METHODS = ("mi", "rfe", "none")
+
     def __init__(
         self,
         variance_threshold: float = 0.0,
         correlation_threshold: float = 0.95,
         feature_selection_k: int = 0,
+        feature_selection_method: str = "mi",
     ):
+        if feature_selection_method not in self.VALID_METHODS:
+            raise ValueError(
+                f"feature_selection_method must be one of {self.VALID_METHODS}, "
+                f"got '{feature_selection_method}'"
+            )
         self.variance_threshold = variance_threshold
         self.correlation_threshold = correlation_threshold
         self.feature_selection_k = feature_selection_k
+        self.feature_selection_method = feature_selection_method
 
     def fit_transform(
         self,
@@ -123,20 +140,51 @@ class FeatureEngineeringPipeline:
         sel_names = [vt_names[i] for i in np.where(corr_mask)[0]]
         p(f"  → {n_after_vt - n_after_corr} dropped  ({n_after_corr} remaining)")
 
-        # ── Stage 3: MI SelectKBest (optional) ────────────────────────────
+        # ── Stage 3: Feature selection (optional) ─────────────────────────
         feature_selector = None
+        method_used = "none"
+
         if self.feature_selection_k > 0:
             k = min(self.feature_selection_k, X_train.shape[1])
-            p(f"Step 3/3 — SelectKBest(mutual_info_classif, k={k}) …")
-            feature_selector = SelectKBest(mutual_info_classif, k=k)
-            X_train = feature_selector.fit_transform(X_train, y_train)
-            X_val   = feature_selector.transform(X_val)
-            X_test  = feature_selector.transform(X_test)
-            sel_names = [sel_names[i] for i in np.where(feature_selector.get_support())[0]]
-            p(f"  → {n_after_corr - k} dropped  ({k} remaining)")
+            method = self.feature_selection_method
+
+            if method == "rfe":
+                # RF drives RFE: importance scores capture feature interactions
+                # that MI (marginal) misses. step removes ~10% per round to
+                # balance accuracy vs. runtime (full step=1 is O(n²) on 78 features).
+                p(f"Step 3/3 — RFE(RandomForest, n_features={k}) …")
+                rf_for_rfe = _RFC(
+                    n_estimators=100,
+                    max_depth=8,
+                    n_jobs=-1,
+                    random_state=42,
+                    class_weight="balanced",
+                )
+                step = max(1, (X_train.shape[1] - k) // 10)
+                feature_selector = RFE(
+                    estimator=rf_for_rfe,
+                    n_features_to_select=k,
+                    step=step,
+                )
+                X_train = feature_selector.fit_transform(X_train, y_train)
+                X_val   = feature_selector.transform(X_val)
+                X_test  = feature_selector.transform(X_test)
+                sel_names = [sel_names[i] for i in np.where(feature_selector.support_)[0]]
+                p(f"  → {n_after_corr - k} dropped  ({k} remaining)  [RF-RFE]")
+                method_used = "rfe"
+
+            else:  # "mi" or any future extension
+                p(f"Step 3/3 — SelectKBest(mutual_info_classif, k={k}) …")
+                feature_selector = SelectKBest(mutual_info_classif, k=k)
+                X_train = feature_selector.fit_transform(X_train, y_train)
+                X_val   = feature_selector.transform(X_val)
+                X_test  = feature_selector.transform(X_test)
+                sel_names = [sel_names[i] for i in np.where(feature_selector.get_support())[0]]
+                p(f"  → {n_after_corr - k} dropped  ({k} remaining)  [MI]")
+                method_used = "mi"
         else:
-            p(f"Step 3/3 — MI selection skipped (FEATURE_SELECTION_K=0); "
-              f"keeping all {n_after_corr}")
+            p(f"Step 3/3 — feature selection skipped "
+              f"(FEATURE_SELECTION_K=0); keeping all {n_after_corr}")
 
         n_final = X_train.shape[1]
         p(f"Feature engineering: {n_initial} → {n_final} "
@@ -154,6 +202,7 @@ class FeatureEngineeringPipeline:
             n_after_vt=n_after_vt,
             n_after_corr=n_after_corr,
             n_final=n_final,
+            selection_method=method_used,
         )
 
     # ── Serialisation ──────────────────────────────────────────────────────

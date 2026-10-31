@@ -21,11 +21,16 @@ class Settings(BaseSettings):
     variance_threshold: float = 0.0
     # Step 2: drop one of each pair with |Pearson r| above this (redundancy pruning)
     correlation_threshold: float = 0.95
-    # Step 3: keep only top-K features ranked by mutual information with the label
-    #         0 = keep all that survived steps 1 & 2
+    # Step 3: keep only top-K features; 0 = keep all that survived steps 1 & 2
     feature_selection_k: int = 0
+    # Step 3 method: mi (mutual information, fast) | rfe (RF-driven, captures interactions) | none
+    feature_selection_method: str = "mi"
     # Scaler applied after feature selection (robust | standard | quantile | maxabs | none)
     scaler_type: str = "robust"
+
+    # CORS — comma-separated list of allowed origins.
+    # Docker nginx serves at http://localhost (port 80); add that origin here.
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost"]
 
     # Inference adapters
     max_upload_mb: int = 100

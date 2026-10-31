@@ -1,0 +1,36 @@
+# Version control
+.git
+.gitignore
+
+# Python caches
+__pycache__
+*.py[cod]
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Virtual environments / conda
+.venv
+venv
+*.egg-info
+dist/
+
+# UI build artefacts and dependencies (built inside Docker)
+ui/node_modules
+ui/dist
+
+# Large data files — mounted as volumes at runtime, not baked into the image
+data/
+models/
+
+# Local environment overrides
+.env.local
+.env.*.local
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+.idea
+.vscode

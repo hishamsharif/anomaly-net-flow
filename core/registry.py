@@ -11,6 +11,7 @@ from core.classifiers.xgboost_clf import XGBoostClassifier
 from core.classifiers.random_forest_clf import RandomForestClassifier
 from core.detectors.mlp_ae import MLPAutoencoder
 from core.detectors.isolation_forest import IsolationForestDetector
+from core.detectors.transfer_ae import TransferAutoencoder
 
 CLASSIFIERS: dict[str, type] = {
     "xgboost":       XGBoostClassifier,
@@ -20,6 +21,7 @@ CLASSIFIERS: dict[str, type] = {
 ANOMALY_DETECTORS: dict[str, type] = {
     "mlp_ae":           MLPAutoencoder,
     "isolation_forest": IsolationForestDetector,
+    "transfer_ae":      TransferAutoencoder,
 }
 
 

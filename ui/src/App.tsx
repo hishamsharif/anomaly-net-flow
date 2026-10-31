@@ -18,7 +18,7 @@ export default function App() {
     <BrowserRouter>
       <nav className="nav">
         <NavLink to="/">About</NavLink>
-        <NavLink to="/training">Train & Evaluate</NavLink>
+        <NavLink to="/training">Training</NavLink>
         <NavLink to="/inference">Inference</NavLink>
       </nav>
       <main>
