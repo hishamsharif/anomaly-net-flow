@@ -5,11 +5,20 @@ Reads bundled CIC-IDS2017 CSV, trains a selected classifier + anomaly
 detector, saves versioned artefacts, returns metrics.
 
 Feature engineering (stages 1-3 shared; stage 4 per-model-path):
-  1. VarianceThreshold   — drop near-constant features
-  2. Correlation pruning — drop one from each highly-correlated pair
-  3. Feature selection   — optional: mi (SelectKBest) | rfe (RF-RFE) | none
-  4a. clf_scaler         — determined by classifier PreprocessingSpec
-  4b. det_scaler         — determined by detector PreprocessingSpec
+  1. VarianceThreshold    — drop near-constant features
+  2. Correlation pruning  — drop one from each highly-correlated pair
+  3. Feature selection    — optional: mi (SelectKBest) | rfe (RF-RFE) | none
+  4a. clf_scaler          — determined by classifier PreprocessingSpec
+  4b. detector_scaler     — determined by detector PreprocessingSpec
+
+Naming conventions (standard scikit-learn / PyTorch ML practice):
+  X_<path>_<split>  — feature matrix for a model path and data split
+                       path: clf (classifier), detector (anomaly detector)
+                       split: train, val, test
+  y_<split>         — label vector (string class names from CIC-IDS2017)
+  clf               — classifier instance  (scikit-learn convention)
+  anomaly_detector  — anomaly detector instance (MLP-AE or Isolation Forest)
+  detector_cls      — class object for the selected detector type
 """
 from __future__ import annotations
 import json
@@ -100,8 +109,8 @@ def run(
     )
 
     # 5. Stage 4: path-specific scalers driven by PreprocessingSpec
-    clf_cls = get_classifier(classifier_type)
-    det_cls = get_detector(detector_type)
+    clf_cls      = get_classifier(classifier_type)
+    detector_cls = get_detector(detector_type)
 
     clf_scaler_type = (
         "none" if not clf_cls.preprocessing.needs_scaling
@@ -113,18 +122,18 @@ def run(
     # for MLP-AE) rather than the global cfg.scaler_type. RobustScaler breaks on
     # CIC-IDS2017 sparse features (IQR≈0 → scale_=1 → unscaled outliers reach the AE).
     det_scaler_type = (
-        "none" if not det_cls.preprocessing.needs_scaling
-        else (det_cls.preprocessing.preferred_scalers[0]
-              if det_cls.preprocessing.preferred_scalers[0] != "none"
+        "none" if not detector_cls.preprocessing.needs_scaling
+        else (detector_cls.preprocessing.preferred_scalers[0]
+              if detector_cls.preprocessing.preferred_scalers[0] != "none"
               else cfg.scaler_type)
     )
     progress(f"Scaler -- classifier: {clf_scaler_type}  detector: {det_scaler_type}")
 
     os.makedirs(artefact_dir, exist_ok=True)
 
-    X_clf_tr, X_clf_v, X_clf_te = FeatureEngineeringPipeline.apply_scaler(
+    X_clf_train, X_clf_val, X_clf_test = FeatureEngineeringPipeline.apply_scaler(
         fe_result, clf_scaler_type, artefact_dir, "clf_scaler.joblib")
-    X_det_tr, X_det_v, X_det_te = FeatureEngineeringPipeline.apply_scaler(
+    X_detector_train, X_detector_val, X_detector_test = FeatureEngineeringPipeline.apply_scaler(
         fe_result, det_scaler_type, artefact_dir, "det_scaler.joblib")
 
     # 6. SMOTE on classifier train split (capped per minority class to avoid 10M+ rows)
@@ -141,16 +150,16 @@ def run(
         f"(cap={target:,}/class, {n_minority} minority classes) ..."
     )
     smote = SMOTE(random_state=42, sampling_strategy=sampling_strategy)
-    X_clf_bal, y_clf_bal = smote.fit_resample(X_clf_tr, y_train)
+    X_clf_train_smote, y_clf_train_smote = smote.fit_resample(X_clf_train, y_train)
 
     # 7. Train classifier
     progress(f"Training {classifier_type} classifier ...")
     clf = clf_cls()
-    clf.fit(X_clf_bal, y_clf_bal)
+    clf.fit(X_clf_train_smote, y_clf_train_smote)
 
     # 8. Evaluate classifier on test set
     progress("Evaluating classifier on test split ...")
-    raw_pred = clf.predict(X_clf_te)
+    raw_pred = clf.predict(X_clf_test)
     if raw_pred and isinstance(raw_pred[0], tuple):
         y_pred   = [p[0] for p in raw_pred]
         y_scores = np.array([p[1] if p[0] != "BENIGN" else 1.0 - p[1] for p in raw_pred])
@@ -164,12 +173,12 @@ def run(
     # every class that appears in y_pred (most with F1=0), masking classifier quality.
     trained_classes = set(clf.classes_) if hasattr(clf, "classes_") else set()
     trained_attack_classes = trained_classes - {"BENIGN"}
-    attack_known_mask = np.array([label in trained_attack_classes for label in y_test])
-    if attack_known_mask.sum() > 0:
+    known_attack_mask = np.array([label in trained_attack_classes for label in y_test])
+    if known_attack_mask.sum() > 0:
         km = _compute_metrics(
-            np.array(y_test)[attack_known_mask],
-            np.array(y_pred)[attack_known_mask],
-            y_scores[attack_known_mask] if y_scores is not None else None,
+            np.array(y_test)[known_attack_mask],
+            np.array(y_pred)[known_attack_mask],
+            y_scores[known_attack_mask] if y_scores is not None else None,
         )
         metrics["known_attack_f1"] = km["f1"]
     else:
@@ -188,30 +197,33 @@ def run(
     # Threshold is set on validation benign rows (not training rows) so it reflects
     # out-of-sample reconstruction error, giving a calibrated FAR floor.
     progress(f"Training {detector_type} anomaly detector on benign flows ...")
-    X_benign_train = X_det_tr[y_train == "BENIGN"]
-    X_benign_val   = X_det_v[y_val == "BENIGN"]
+    X_detector_train_benign = X_detector_train[y_train == "BENIGN"]
+    X_detector_val_benign   = X_detector_val[y_val == "BENIGN"]
+    detector_cls = get_detector(detector_type)
     if detector_type in ("mlp_ae", "transfer_ae"):
-        det = det_cls(
+        anomaly_detector = detector_cls(
             anomaly_threshold_percentile=getattr(cfg, "ae_anomaly_threshold_percentile", 95.0),
             freeze_epochs=getattr(cfg, "ae_freeze_epochs", 5),
         )
-        det.fit(X_benign_train, X_benign_val=X_benign_val, on_progress=progress)
+        anomaly_detector.fit(
+            X_detector_train_benign, X_benign_val=X_detector_val_benign, on_progress=progress
+        )
     else:
-        det = det_cls()
-        det.fit(X_benign_train)
+        anomaly_detector = detector_cls()
+        anomaly_detector.fit(X_detector_train_benign)
 
     # 10. Novel-attack detection rate: fraction of test-set novel attacks caught by AE.
     # Novel = non-BENIGN AND not in trained attack classes (i.e. the unseen Friday attacks).
     # This is the primary metric when the classifier has zero coverage of the test classes.
-    novel_mask = np.array([
+    novel_attack_mask = np.array([
         label != "BENIGN" and label not in trained_attack_classes
         for label in y_test
     ])
-    if novel_mask.sum() > 0:
-        ae_scores_test = det.score_batch(X_det_te)
-        ae_threshold   = det.threshold or 0.0
-        novel_detected = int((ae_scores_test[novel_mask] > ae_threshold).sum())
-        novel_total    = int(novel_mask.sum())
+    if novel_attack_mask.sum() > 0:
+        ae_scores_test    = anomaly_detector.score_batch(X_detector_test)
+        ae_threshold      = anomaly_detector.threshold or 0.0
+        novel_detected = int((ae_scores_test[novel_attack_mask] > ae_threshold).sum())
+        novel_total    = int(novel_attack_mask.sum())
         metrics["novel_attack_detection_rate"] = round(novel_detected / novel_total, 4)
         metrics["novel_attack_test_rows"]      = novel_total
         metrics["novel_attack_detected"]       = novel_detected
@@ -225,7 +237,7 @@ def run(
         metrics["novel_attack_test_rows"]      = 0
         metrics["novel_attack_detected"]       = 0
 
-    # 11. Log top-20 feature importances
+    # 11a. Log top-20 feature importances
     importances = clf.feature_importances() if hasattr(clf, "feature_importances") else None
     sel_names = fe_result.feature_names_selected
     if importances is not None and len(importances) == len(sel_names):
@@ -234,17 +246,17 @@ def run(
         for rank, idx in enumerate(top_idx, 1):
             progress(f"  {rank:2d}. {sel_names[idx]:<45s}  {importances[idx]:.4f}")
 
-    # 11. Save regression snapshot for AE candidate gate (fine-tune pipeline).
+    # 11b. Save regression snapshot for AE candidate gate (fine-tune pipeline).
     # 2,000 Fri-AM benign flows + up to 2,000 novel-attack flows from the test set.
     _save_regression_snapshot(
-        artefact_dir, X_det_v, y_val, X_det_te, y_test,
+        artefact_dir, X_detector_val, y_val, X_detector_test, y_test,
         n_benign=2000, n_novel=2000
     )
 
     # 12. Save artefacts
     progress("Saving model artefacts ...")
     clf.save(os.path.join(artefact_dir, "classifier.joblib"))
-    det.save(os.path.join(artefact_dir, "detector.joblib"))
+    anomaly_detector.save(os.path.join(artefact_dir, "detector.joblib"))
     FeatureEngineeringPipeline.save_artefacts(fe_result, artefact_dir)
 
     completed_at = time.time()
@@ -274,13 +286,13 @@ def run(
         "top_features":           top_features,
         "classes":                list(clf.classes_) if hasattr(clf, "classes_") else [],
         "class_distribution_train": {k: int(v) for k, v in counts.items()},
-        "ae_threshold":           float(det.threshold) if hasattr(det, "threshold") else None,
-        "train_rows_raw":         int(len(X_clf_tr)),
-        "train_rows":             int(len(X_clf_bal)),
-        "val_rows":               int(len(X_clf_v)),
-        "test_rows":              int(len(X_clf_te)),
-        "smote_before_total":     int(len(X_clf_tr)),
-        "smote_after_total":      int(len(X_clf_bal)),
+        "ae_threshold":           float(anomaly_detector.threshold) if hasattr(anomaly_detector, "threshold") else None,
+        "train_rows_raw":         int(len(X_clf_train)),
+        "train_rows":             int(len(X_clf_train_smote)),
+        "val_rows":               int(len(X_clf_val)),
+        "test_rows":              int(len(X_clf_test)),
+        "smote_before_total":     int(len(X_clf_train)),
+        "smote_after_total":      int(len(X_clf_train_smote)),
         "smote_n_minority":       int(n_minority),
         "smote_target_per_class": int(target),
         "clf_scaler_type":        clf_scaler_type,
