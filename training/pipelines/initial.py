@@ -200,7 +200,32 @@ def run(
         det = det_cls()
         det.fit(X_benign_train)
 
-    # 10. Log top-20 feature importances
+    # 10. Novel-attack detection rate: fraction of test-set novel attacks caught by AE.
+    # Novel = non-BENIGN AND not in trained attack classes (i.e. the unseen Friday attacks).
+    # This is the primary metric when the classifier has zero coverage of the test classes.
+    novel_mask = np.array([
+        label != "BENIGN" and label not in trained_attack_classes
+        for label in y_test
+    ])
+    if novel_mask.sum() > 0:
+        ae_scores_test = det.score_batch(X_det_te)
+        ae_threshold   = det.threshold or 0.0
+        novel_detected = int((ae_scores_test[novel_mask] > ae_threshold).sum())
+        novel_total    = int(novel_mask.sum())
+        metrics["novel_attack_detection_rate"] = round(novel_detected / novel_total, 4)
+        metrics["novel_attack_test_rows"]      = novel_total
+        metrics["novel_attack_detected"]       = novel_detected
+        progress(
+            f"Novel-attack detection (AE only): "
+            f"{novel_detected:,}/{novel_total:,} = "
+            f"{metrics['novel_attack_detection_rate']:.1%}"
+        )
+    else:
+        metrics["novel_attack_detection_rate"] = None
+        metrics["novel_attack_test_rows"]      = 0
+        metrics["novel_attack_detected"]       = 0
+
+    # 11. Log top-20 feature importances
     importances = clf.feature_importances() if hasattr(clf, "feature_importances") else None
     sel_names = fe_result.feature_names_selected
     if importances is not None and len(importances) == len(sel_names):
@@ -258,7 +283,10 @@ def run(
         "started_at":             started_at,
         "completed_at":           completed_at,
         "training_duration_s":    round(completed_at - started_at, 1),
-        "known_attack_f1":        metrics.get("known_attack_f1", 0.0),
+        "known_attack_f1":               metrics.get("known_attack_f1", 0.0),
+        "novel_attack_detection_rate":   metrics.get("novel_attack_detection_rate"),
+        "novel_attack_test_rows":        metrics.get("novel_attack_test_rows", 0),
+        "novel_attack_detected":         metrics.get("novel_attack_detected", 0),
     }
     with open(os.path.join(artefact_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)

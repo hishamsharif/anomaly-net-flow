@@ -95,9 +95,12 @@ async def pipeline_stats(db: AsyncSession = Depends(get_db)):
             "top_features":            m.get("top_features", []),
             "selected_feature_names":  m.get("selected_feature_names", []),
             # Evaluation extras
-            "recall":                  m.get("recall"),
-            "pr_auc":                  m.get("pr_auc"),
-            "known_attack_f1":         m.get("known_attack_f1"),
+            "recall":                        m.get("recall"),
+            "pr_auc":                        m.get("pr_auc"),
+            "known_attack_f1":               m.get("known_attack_f1"),
+            "novel_attack_detection_rate":   m.get("novel_attack_detection_rate"),
+            "novel_attack_test_rows":        m.get("novel_attack_test_rows"),
+            "novel_attack_detected":         m.get("novel_attack_detected"),
             # Training config
             "ae_threshold":            m.get("ae_threshold"),
             "training_duration_s":     m.get("training_duration_s"),

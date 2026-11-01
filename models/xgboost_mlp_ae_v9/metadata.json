@@ -241,5 +241,23 @@
   "started_at": 1793450621.5835962,
   "completed_at": 1793451509.4960055,
   "training_duration_s": 887.9,
-  "known_attack_f1": 0.0
+  "known_attack_f1": 0.0,
+  "novel_attack_detection_rate": 0.735,
+  "novel_attack_test_rows": 286957,
+  "novel_attack_detected": 211003,
+  "novel_attack_per_class": {
+    "DDoS": {
+      "total": 128027,
+      "detected": 127612,
+      "rate": 0.9968
+    },
+    "PortScan": {
+      "total": 158930,
+      "detected": 83391,
+      "rate": 0.5247
+    }
+  },
+  "test_benign_rows": 225255,
+  "test_false_alarms": 40668,
+  "test_far_on_novel_split": 0.1805
 }
