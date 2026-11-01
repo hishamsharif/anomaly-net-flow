@@ -1,18 +1,17 @@
 """
-PCAP → CIC-IDS2017-compatible feature DataFrame via NFStream.
+PCAP → CIC-IDS2017-compatible feature DataFrame.
 
-NFStream groups raw packets into bidirectional flows and computes the same
-statistical features as CICFlowMeter (the tool used to generate CIC-IDS2017):
-duration, packet counts, byte rates, IAT statistics, flag counts, window sizes.
+Primary extractor: Python cicflowmeter (Scapy-based CICFlowMeter reimplementation).
+cicflowmeter reproduces CICFlowMeter's active/idle window algorithm, giving full
+coverage of all selected features including Active Mean/Std/Max/Min, Idle Std,
+and Fwd/Bwd Header Length that NFStream cannot produce.
+
+Fallback extractor: NFStream (used if cicflowmeter is unavailable).
+NFStream limitation: Active Mean/Std/Max/Min, Idle Std, Fwd Header Length and
+Bwd Header Length are set to zero — those 7 features are absent from NFStream's
+flow statistics.
 
 This adapter is inference-only. Extracted flows carry no labels.
-
-Known limitation: five CICFlowMeter-specific features cannot be derived from
-NFStream and are always zero for PCAP inference — Active Mean/Std/Max/Min and
-Idle Std. These are computed by CICFlowMeter's activity-window algorithm which
-tracks idle gaps within a flow; NFStream has no equivalent. For short-lived
-attack flows (DoS, scans, brute-force) these features are near-zero anyway, so
-the practical impact on classifier accuracy is minimal.
 """
 import numpy as np
 import pandas as pd
@@ -110,18 +109,32 @@ _DROP = {
 
 
 class PcapAdapter:
+    """
+    Preferred extractor: CicFlowMeterAdapter (full feature coverage).
+    Falls back to NFStream if cicflowmeter is not importable.
+    """
+
     def load(self, path: str) -> pd.DataFrame:
         """
-        Extract bidirectional flows from a PCAP/PCAPNG file using NFStream
-        and return a DataFrame of CICFlowMeter-compatible features.
+        Extract bidirectional flows from a PCAP/PCAPNG file.
+        Tries the Python cicflowmeter package first for maximum CIC-IDS2017
+        feature coverage; falls back to NFStream if not available.
         """
+        try:
+            from inference.adapters.cicfm_adapter import CicFlowMeterAdapter
+            return CicFlowMeterAdapter().load(path)
+        except (ImportError, RuntimeError):
+            pass  # fall through to NFStream
+
+        # ── NFStream fallback ─────────────────────────────────────────────────
         try:
             from nfstream import NFStreamer
         except ImportError:
             raise RuntimeError(
-                "nfstream is required for PCAP inference.\n"
-                "Install it with:  pip install nfstream\n"
-                "Note: nfstream requires libpcap (Linux/macOS) or Npcap (Windows)."
+                "No PCAP extractor available. Install cicflowmeter:\n"
+                "  pip install cicflowmeter\n"
+                "or nfstream (Linux/macOS only):\n"
+                "  pip install nfstream"
             )
 
         streamer = NFStreamer(

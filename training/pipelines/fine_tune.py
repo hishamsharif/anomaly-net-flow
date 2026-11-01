@@ -102,16 +102,25 @@ def run(
         metrics = {"f1": 0.0, "far": 0.0, "amr": 0.0}
     progress(f"Test  F1={metrics['f1']:.4f}  FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}")
 
+    # AE candidate regression gate: compare candidate vs incumbent on fixed snapshot.
+    # Snapshot created during initial training: regression_X.npy + regression_y_is_attack.npy
+    reg_metrics = _ae_regression_gate(
+        prev_artefact_dir, det, det_scaler, progress
+    )
+    if reg_metrics:
+        metrics.update(reg_metrics)
+
     # Save artefacts
     progress("Saving artefacts ...")
     os.makedirs(artefact_dir, exist_ok=True)
     clf.save(os.path.join(artefact_dir, "classifier.joblib"))
     det.save(os.path.join(artefact_dir, "detector.joblib"))
 
-    # Copy all preprocessing artefacts from previous version
+    # Copy all preprocessing artefacts and feature schema from previous version
     for fname in ("variance_threshold.joblib", "corr_mask.joblib",
                   "feature_selector.joblib", "clf_scaler.joblib", "det_scaler.joblib",
-                  "scaler.joblib"):
+                  "scaler.joblib", "feature_schema.json",
+                  "regression_X.npy", "regression_y_is_attack.npy"):
         src = os.path.join(prev_artefact_dir, fname)
         if os.path.exists(src):
             shutil.copy2(src, artefact_dir)
@@ -128,11 +137,93 @@ def run(
         "cumulative_rows":        int(len(df_cumulative)),
         "incremental_rows":       int(len(df_inc)),
         "new_savepoint_max_id":   int(new_max_id),
+        **(reg_metrics or {}),
     }
     with open(os.path.join(artefact_dir, "metadata.json"), "w") as f:
         json.dump(meta, f, indent=2)
 
     return {**metrics, **meta, "artefact_dir": artefact_dir, "new_savepoint_max_id": int(new_max_id)}
+
+
+def _ae_regression_gate(
+    prev_artefact_dir: str,
+    candidate_det,
+    det_scaler,
+    progress,
+) -> dict | None:
+    """
+    Compare candidate AE vs incumbent on the fixed regression snapshot saved
+    during initial training.  Logs a WARNING if recall drops > 5% or FAR rises
+    > 10%.  Returns a dict of gate metrics to include in fine-tune metadata.
+    Skips silently if no regression snapshot exists.
+    """
+    reg_X_path = os.path.join(prev_artefact_dir, "regression_X.npy")
+    reg_y_path = os.path.join(prev_artefact_dir, "regression_y_is_attack.npy")
+    if not (os.path.exists(reg_X_path) and os.path.exists(reg_y_path)):
+        progress("AE regression gate: no snapshot found — skipping gate check.")
+        return None
+
+    X_reg = np.load(reg_X_path)
+    y_reg = np.load(reg_y_path)          # 0=benign, 1=attack
+
+    # Rescale if a scaler is available (snapshot is stored pre-scaled in det space)
+    # — snapshot was saved from X_det_val/test which are already scaled, so no transform needed.
+
+    # Load incumbent from previous artefact
+    incumbent_path = os.path.join(prev_artefact_dir, "detector.joblib")
+    if not os.path.exists(incumbent_path):
+        progress("AE regression gate: no incumbent detector found — skipping.")
+        return None
+
+    try:
+        from core.registry import get_detector
+        incumbent_cls = type(candidate_det)
+        incumbent = incumbent_cls.load(incumbent_path)
+    except Exception as e:
+        progress(f"AE regression gate: could not load incumbent ({e}) — skipping.")
+        return None
+
+    def _eval(det) -> tuple[float, float]:
+        scores = det.score_batch(X_reg)
+        thresh = det.threshold or 0.0
+        flags  = (scores > thresh).astype(int)
+        attack_rows = y_reg == 1
+        benign_rows = y_reg == 0
+        recall = float(flags[attack_rows].mean()) if attack_rows.sum() > 0 else 0.0
+        far    = float(flags[benign_rows].mean()) if benign_rows.sum() > 0 else 0.0
+        return recall, far
+
+    inc_recall, inc_far   = _eval(incumbent)
+    cand_recall, cand_far = _eval(candidate_det)
+
+    recall_drop = inc_recall - cand_recall   # positive = candidate is worse
+    far_increase = cand_far - inc_far         # positive = candidate raises FAR
+
+    gate_pass = recall_drop <= 0.05 and far_increase <= 0.10
+    status = "PASS" if gate_pass else "WARN"
+
+    msg = (
+        f"AE regression gate [{status}]: "
+        f"incumbent recall={inc_recall:.3f} FAR={inc_far:.3f}  |  "
+        f"candidate recall={cand_recall:.3f} FAR={cand_far:.3f}  |  "
+        f"Δrecall={recall_drop:+.3f} ΔFAR={far_increase:+.3f}"
+    )
+    progress(msg)
+    if not gate_pass:
+        progress(
+            "  WARNING: candidate AE fails quality gate. "
+            "Proceeding with promotion — review metrics before serving production traffic."
+        )
+
+    return {
+        "ae_gate_status":           status,
+        "ae_gate_incumbent_recall": round(inc_recall, 4),
+        "ae_gate_incumbent_far":    round(inc_far, 4),
+        "ae_gate_candidate_recall": round(cand_recall, 4),
+        "ae_gate_candidate_far":    round(cand_far, 4),
+        "ae_gate_recall_drop":      round(recall_drop, 4),
+        "ae_gate_far_increase":     round(far_increase, 4),
+    }
 
 
 def _extract(df: pd.DataFrame, vt, corr_mask, feature_selector, scaler):

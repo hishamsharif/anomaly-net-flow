@@ -35,6 +35,24 @@ class TrainingSavepoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class FeatureSchemaVersion(Base):
+    """
+    Versioned feature contract — tracks which extractor and feature set produced
+    each trained model. Append-only; never overwrite a released schema record.
+    """
+    __tablename__ = "feature_schema_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    schema_version: Mapped[str] = mapped_column(String(64))        # e.g. cicids2017-flow-schema-v1
+    extractor_name: Mapped[str] = mapped_column(String(64))        # cicflowmeter-python | nfstream
+    extractor_version: Mapped[str | None] = mapped_column(String(32))
+    selected_feature_count: Mapped[int | None] = mapped_column(Integer)
+    absent_features_json: Mapped[list] = mapped_column(JSON, default=list)
+    compatibility_notes: Mapped[str | None] = mapped_column(Text)
+    artefact_path: Mapped[str | None] = mapped_column(Text)        # path to feature_schema.json
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
 class ModelVersion(Base):
     __tablename__ = "model_versions"
 
@@ -47,6 +65,9 @@ class ModelVersion(Base):
     # training | active | archived | failed
     status: Mapped[str] = mapped_column(String(16), default="training")
     savepoint_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("training_savepoints.id"))
+    feature_schema_version_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("feature_schema_versions.id")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
@@ -75,8 +96,12 @@ class Alert(Base):
     classifier_confidence: Mapped[float | None] = mapped_column(Float)
     ae_score: Mapped[float | None] = mapped_column(Float)
     ai_skipped: Mapped[bool] = mapped_column(default=False)
-    # analyst_confirmed | analyst_override | null
+    # analyst_confirmed | analyst_override | analyst_uncertain | analyst_escalate | null
+    # Only analyst_confirmed and analyst_override are retraining_eligible.
+    # Predictions are append-only; analyst_verdict is the only field updated post-creation.
     analyst_verdict: Mapped[str | None] = mapped_column(String(32))
+    # False for analyst_uncertain / analyst_escalate; True for confirmed / override.
+    retraining_eligible: Mapped[bool] = mapped_column(default=False)
     analyst_label: Mapped[str | None] = mapped_column(String(64))
     labelled_flow_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("labelled_flows.id"))
     model_version_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("model_versions.id"))

@@ -7,11 +7,19 @@ from api.database import get_db
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
+_VALID_VERDICTS = {
+    "analyst_confirmed",   # prediction correct — retraining eligible
+    "analyst_override",    # prediction wrong, correct label supplied — retraining eligible
+    "analyst_uncertain",   # analyst unsure — NOT retraining eligible
+    "analyst_escalate",    # needs senior review — NOT retraining eligible
+}
+_RETRAINING_ELIGIBLE = {"analyst_confirmed", "analyst_override"}
+
+
 class FeedbackRequest(BaseModel):
-    # The label the analyst believes is correct
+    # The label the analyst believes is correct (required for all verdicts)
     correct_label: str
-    # Whether the model prediction was right or wrong
-    # analyst_confirmed | analyst_override
+    # analyst_confirmed | analyst_override | analyst_uncertain | analyst_escalate
     verdict: str
 
 
@@ -58,8 +66,11 @@ async def submit_feedback(
     so that fine-tuning benefits from both signals.
     Increments the verdict count toward the K fine-tune threshold.
     """
-    if req.verdict not in ("analyst_confirmed", "analyst_override"):
-        raise HTTPException(400, "verdict must be 'analyst_confirmed' or 'analyst_override'")
+    if req.verdict not in _VALID_VERDICTS:
+        raise HTTPException(
+            400,
+            f"verdict must be one of: {sorted(_VALID_VERDICTS)}"
+        )
 
     from sqlalchemy import select, func
     from datetime import datetime, timezone
@@ -70,30 +81,45 @@ async def submit_feedback(
     if alert is None:
         raise HTTPException(404, f"Alert {alert_id} not found")
 
-    # Append verdict to label store
-    lf = LabelledFlow(
-        features_json={},
-        label=req.correct_label,
-        source=req.verdict,
-        predicted_label=alert.predicted_label,
-        model_version_id=alert.model_version_id,
-    )
-    db.add(lf)
-    await db.flush()
+    eligible = req.verdict in _RETRAINING_ELIGIBLE
 
-    # Update alert with analyst verdict
+    # Append to label store only for retraining-eligible verdicts
+    lf_id = None
+    if eligible:
+        lf = LabelledFlow(
+            features_json={},
+            label=req.correct_label,
+            source=req.verdict,
+            predicted_label=alert.predicted_label,
+            model_version_id=alert.model_version_id,
+        )
+        db.add(lf)
+        await db.flush()
+        lf_id = lf.id
+
+    # Update alert — predictions are append-only; only verdict fields are written here
     alert.analyst_verdict = req.verdict
     alert.analyst_label = req.correct_label
-    alert.labelled_flow_id = lf.id
+    alert.retraining_eligible = eligible
+    if lf_id is not None:
+        alert.labelled_flow_id = lf_id
     alert.feedback_at = datetime.now(timezone.utc)
     await db.commit()
 
-    # Return updated verdict count
+    # Return retraining-eligible verdict count (uncertain/escalate excluded)
     count_result = await db.execute(
-        select(func.count()).select_from(Alert).where(Alert.analyst_verdict.isnot(None))
+        select(func.count()).select_from(Alert).where(
+            Alert.analyst_verdict.isnot(None),
+            Alert.retraining_eligible == True,  # noqa: E712
+        )
     )
     verdict_count = count_result.scalar_one() or 0
-    return {"alert_id": alert_id, "verdict": req.verdict, "verdict_count": verdict_count}
+    return {
+        "alert_id": alert_id,
+        "verdict": req.verdict,
+        "retraining_eligible": eligible,
+        "verdict_count": verdict_count,
+    }
 
 
 @router.get("/metrics")
@@ -104,8 +130,16 @@ async def get_metrics(db: AsyncSession = Depends(get_db)):
     """
     from sqlalchemy import select, func
     from api.db.models import Alert
-    result = await db.execute(
+    total_result = await db.execute(
         select(func.count()).select_from(Alert).where(Alert.analyst_verdict.isnot(None))
     )
-    verdict_count = result.scalar_one() or 0
-    return {"verdict_count": verdict_count}
+    eligible_result = await db.execute(
+        select(func.count()).select_from(Alert).where(
+            Alert.analyst_verdict.isnot(None),
+            Alert.retraining_eligible == True,  # noqa: E712
+        )
+    )
+    return {
+        "verdict_count": total_result.scalar_one() or 0,
+        "retraining_eligible_count": eligible_result.scalar_one() or 0,
+    }

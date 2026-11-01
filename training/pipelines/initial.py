@@ -234,13 +234,23 @@ def run(
         for rank, idx in enumerate(top_idx, 1):
             progress(f"  {rank:2d}. {sel_names[idx]:<45s}  {importances[idx]:.4f}")
 
-    # 11. Save artefacts
+    # 11. Save regression snapshot for AE candidate gate (fine-tune pipeline).
+    # 2,000 Fri-AM benign flows + up to 2,000 novel-attack flows from the test set.
+    _save_regression_snapshot(
+        artefact_dir, X_det_v, y_val, X_det_te, y_test,
+        n_benign=2000, n_novel=2000
+    )
+
+    # 12. Save artefacts
     progress("Saving model artefacts ...")
     clf.save(os.path.join(artefact_dir, "classifier.joblib"))
     det.save(os.path.join(artefact_dir, "detector.joblib"))
     FeatureEngineeringPipeline.save_artefacts(fe_result, artefact_dir)
 
     completed_at = time.time()
+
+    # 13. Emit feature_schema.json — versioned feature contract for inference
+    _save_feature_schema(artefact_dir, feature_cols, sel_names)
 
     # Feature importances for top-15 display in the UI
     importances_full = clf.feature_importances() if hasattr(clf, "feature_importances") else None
@@ -293,6 +303,79 @@ def run(
 
     return {**metrics, **metadata, "artefact_dir": artefact_dir,
             "known_attack_f1": metrics.get("known_attack_f1", 0.0)}
+
+
+def _save_feature_schema(artefact_dir: str, raw_feature_cols: list, selected_names: list) -> None:
+    """Write feature_schema.json — versioned feature contract for training/inference."""
+    import datetime
+    try:
+        from inference.adapters.cicfm_adapter import _CICFM_VERSION as extractor_ver
+        extractor_name = "cicflowmeter-python"
+    except ImportError:
+        extractor_name = "nfstream"
+        extractor_ver = "unknown"
+
+    # Features known to be absent from NFStream (present in cicflowmeter)
+    _NFSTREAM_ABSENT = [
+        "Active Mean", "Active Std", "Active Max", "Active Min",
+        "Idle Std", "Fwd Header Length", "Bwd Header Length",
+    ]
+    absent = [f for f in _NFSTREAM_ABSENT if f in selected_names] if extractor_name == "nfstream" else []
+
+    schema = {
+        "schema_version":      "cicids2017-flow-schema-v1",
+        "extractor_name":      extractor_name,
+        "extractor_version":   extractor_ver,
+        "raw_feature_count":   len(raw_feature_cols),
+        "selected_feature_count": len(selected_names),
+        "selected_features":   selected_names,
+        "features_absent_from_extractor": absent,
+        "compatibility_notes": (
+            "Selected features are the output of VarianceThreshold + correlation pruning "
+            "applied to CIC-IDS2017 CSV columns. Inference must supply the same ordered "
+            "feature list; missing columns are filled with 0. "
+            + (
+                f"WARNING: {len(absent)} selected features not producible by {extractor_name}: "
+                + str(absent)
+                if absent else
+                "All selected features are producible by the registered extractor."
+            )
+        ),
+        "missing_value_policy": "fill_zero",
+        "scaler_note":          "clf_scaler.joblib (classifier path), det_scaler.joblib (detector path)",
+        "created_at":           datetime.datetime.utcnow().isoformat() + "Z",
+    }
+    path = os.path.join(artefact_dir, "feature_schema.json")
+    with open(path, "w") as f:
+        json.dump(schema, f, indent=2)
+
+
+def _save_regression_snapshot(
+    artefact_dir: str,
+    X_det_val: np.ndarray, y_val: np.ndarray,
+    X_det_test: np.ndarray, y_test: np.ndarray,
+    n_benign: int = 2000, n_novel: int = 2000,
+) -> None:
+    """
+    Save a fixed regression snapshot for AE candidate quality gate in fine_tune.py.
+    Uses Fri-AM benign (val) + a sample of novel-attack rows from test.
+    Stored as regression_X.npy + regression_y_is_attack.npy in artefact_dir.
+    """
+    rng = np.random.default_rng(42)
+
+    benign_idx = np.where(y_val == "BENIGN")[0]
+    chosen_b = rng.choice(benign_idx, size=min(n_benign, len(benign_idx)), replace=False)
+    X_b = X_det_val[chosen_b]
+
+    novel_idx = np.where(y_test != "BENIGN")[0]
+    chosen_n = rng.choice(novel_idx, size=min(n_novel, len(novel_idx)), replace=False)
+    X_n = X_det_test[chosen_n]
+
+    X_reg = np.vstack([X_b, X_n])
+    y_reg = np.array([0] * len(X_b) + [1] * len(X_n))   # 0=benign, 1=attack
+
+    np.save(os.path.join(artefact_dir, "regression_X.npy"),           X_reg)
+    np.save(os.path.join(artefact_dir, "regression_y_is_attack.npy"), y_reg)
 
 
 def _compute_metrics(y_true, y_pred, y_scores: np.ndarray | None = None) -> dict:

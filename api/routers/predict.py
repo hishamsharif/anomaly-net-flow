@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 import uuid
 
 import numpy as np
@@ -63,6 +64,7 @@ async def predict_batch(
         tmp.write(raw)
         tmp_path = tmp.name
 
+    t_extract_start = time.monotonic()
     try:
         if adapter_key == "csv":
             from inference.adapters.csv_adapter import CSVInferenceAdapter
@@ -72,6 +74,7 @@ async def predict_batch(
             df = PcapAdapter().load(tmp_path)
     finally:
         os.unlink(tmp_path)
+    extraction_ms = int((time.monotonic() - t_extract_start) * 1000)
 
     if df.empty:
         raise HTTPException(422, "No flows could be extracted from the uploaded file")
@@ -80,32 +83,36 @@ async def predict_batch(
     if model is None:
         raise HTTPException(503, "No trained model loaded — run initial training first")
 
+    t_preproc_start = time.monotonic()
     # Align to model's raw feature list, filling any gaps with 0
     for col in model.feature_names:
         if col not in df.columns:
             df[col] = 0.0
     X_raw = df[model.feature_names].fillna(0).values.astype(np.float32)
-
-    # Stage 2 — supervised classifier (batch)
     X_clf = model.preprocess_clf(X_raw)
+    X_det = model.preprocess_det(X_raw)
+    preprocessing_ms = int((time.monotonic() - t_preproc_start) * 1000)
+
+    t_infer_start = time.monotonic()
+    # Stage 2 — supervised classifier (batch)
     clf_results: list[tuple[str, float]] = model.classifier.predict(X_clf)
 
     # Stage 3 — anomaly detector (batch-efficient)
-    X_det = model.preprocess_det(X_raw)
     detector = model.detector
     if hasattr(detector, "score_batch"):
         ae_scores: np.ndarray = detector.score_batch(X_det)
         threshold = getattr(detector, "threshold", 0.0) or 0.0
         anomaly_flags = (ae_scores > threshold).tolist()
     else:
-        # Fallback for detectors that only implement the single-row interface
         pairs = [detector.is_anomaly(X_det[i]) for i in range(len(X_det))]
         anomaly_flags = [p[0] for p in pairs]
         ae_scores = np.array([p[1] for p in pairs])
+    inference_ms = int((time.monotonic() - t_infer_start) * 1000)
 
     db_alerts: list[Alert] = []
     response_alerts: list[dict] = []
     summary: dict[str, int] = {}
+    both_flagged_count = 0  # classifier says attack AND AE flags anomaly
 
     for i, (clf_label, clf_conf) in enumerate(clf_results):
         # Stage 1 — rule engine
@@ -123,6 +130,8 @@ async def predict_batch(
             pred_label = clf_label
             conf_val = float(clf_conf)
             ae_val = float(ae_scores[i])
+            if clf_label != "BENIGN" and float(clf_conf) >= 0.6 and is_anom:
+                both_flagged_count += 1
 
         severity = _SEVERITY[consensus]
         flow_id = str(uuid.uuid4())
@@ -155,6 +164,15 @@ async def predict_batch(
     return {
         "total": len(response_alerts),
         "model_version_id": model.version_id,
-        "summary": summary,
+        "summary": {
+            **summary,
+            "both_flagged_count": both_flagged_count,
+        },
+        "processing": {
+            "extraction_ms":    extraction_ms,
+            "preprocessing_ms": preprocessing_ms,
+            "inference_ms":     inference_ms,
+            "total_ms":         extraction_ms + preprocessing_ms + inference_ms,
+        },
         "alerts": response_alerts,
     }

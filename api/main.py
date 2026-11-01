@@ -19,6 +19,24 @@ def _migrate_db_location_on_startup() -> None:
         print(f"[startup] Migrated database: {old} → {new}")
 
 
+def _migrate_schema_on_startup() -> None:
+    """Add new columns to existing SQLite tables (idempotent)."""
+    from api.database import sync_engine
+    migrations = [
+        # Alert: retraining_eligible — False for existing rows (uncertain verdicts not yet tracked)
+        "ALTER TABLE alerts ADD COLUMN retraining_eligible BOOLEAN NOT NULL DEFAULT 0",
+        # ModelVersion: feature_schema_version_id FK (nullable, NULL for pre-existing models)
+        "ALTER TABLE model_versions ADD COLUMN feature_schema_version_id INTEGER REFERENCES feature_schema_versions(id)",
+    ]
+    with sync_engine.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(__import__("sqlalchemy").text(sql))
+                conn.commit()
+            except Exception:
+                pass  # column already exists — SQLite raises OperationalError
+
+
 def _mark_stale_training_on_startup() -> None:
     """
     Mark any ModelVersion rows left in 'training' status as 'failed'.
@@ -83,6 +101,7 @@ def _load_active_model_on_startup() -> None:
 async def lifespan(app: FastAPI):
     _migrate_db_location_on_startup()
     await init_db()
+    _migrate_schema_on_startup()
     _mark_stale_training_on_startup()
     _load_active_model_on_startup()
     yield
