@@ -47,7 +47,7 @@ def run(
     from core.registry import get_detector
 
     # Load preprocessing artefacts from previous version
-    vt = joblib.load(os.path.join(prev_artefact_dir, "variance_threshold.joblib"))
+    var_thresh = joblib.load(os.path.join(prev_artefact_dir, "variance_threshold.joblib"))
 
     def _load_opt(fname):
         p = os.path.join(prev_artefact_dir, fname)
@@ -57,7 +57,7 @@ def run(
     feature_selector = _load_opt("feature_selector.joblib")
 
     # Prefer new dual scalers; fall back to legacy single scaler
-    det_scaler = _load_opt("det_scaler.joblib") or _load_opt("scaler.joblib")
+    ae_scaler = _load_opt("det_scaler.joblib") or _load_opt("scaler.joblib")
 
     new_max_id = get_max_flow_id()
     progress(f"New savepoint max_flow_id = {new_max_id}")
@@ -66,22 +66,22 @@ def run(
     # AE: incremental rows (analyst verdicts since last savepoint) + replay buffer
     df_inc    = load_incremental(prev_savepoint_max_id, new_max_id)
     df_replay = load_replay_buffer(prev_savepoint_max_id, settings.ae_replay_buffer_fraction)
-    X_inc, y_inc = _extract(df_inc,    vt, corr_mask, feature_selector, det_scaler)
-    X_rep, y_rep = _extract(df_replay, vt, corr_mask, feature_selector, det_scaler)
+    X_inc, y_inc = _extract(df_inc,    var_thresh, corr_mask, feature_selector, ae_scaler)
+    X_rep, y_rep = _extract(df_replay, var_thresh, corr_mask, feature_selector, ae_scaler)
 
     X_inc_benign = X_inc[y_inc == "BENIGN"]
     X_rep_benign = X_rep[y_rep == "BENIGN"] if len(X_rep) else None
     progress(f"Fine-tuning {detector_type}: {len(X_inc_benign)} new benign + "
              f"{len(X_rep_benign) if X_rep_benign is not None else 0} replay benign ...")
 
-    det_cls = get_detector(detector_type)
-    det = det_cls.load(os.path.join(prev_artefact_dir, "detector.joblib"))
-    det.fine_tune(X_inc_benign, X_rep_benign if X_rep_benign is not None and len(X_rep_benign) else None)
+    detector_cls = get_detector(detector_type)
+    ae_model = detector_cls.load(os.path.join(prev_artefact_dir, "detector.joblib"))
+    ae_model.fine_tune(X_inc_benign, X_rep_benign if X_rep_benign is not None and len(X_rep_benign) else None)
 
     # AE candidate regression gate: compare candidate vs incumbent on fixed snapshot.
     # Snapshot created during initial training: regression_X.npy + regression_y_is_attack.npy
     reg_metrics = _ae_regression_gate(
-        prev_artefact_dir, det, det_scaler, progress
+        prev_artefact_dir, ae_model, ae_scaler, progress
     )
     metrics = {"f1": 0.0, "far": 0.0, "amr": 0.0}
     if reg_metrics:
@@ -103,7 +103,7 @@ def run(
     else:
         raise RuntimeError("Base classifier.joblib not found in prev_artefact_dir — cannot proceed.")
 
-    det.save(os.path.join(artefact_dir, "detector.joblib"))
+    ae_model.save(os.path.join(artefact_dir, "detector.joblib"))
 
     # Copy all preprocessing artefacts and feature schema from previous version
     for fname in ("variance_threshold.joblib", "corr_mask.joblib",
@@ -122,7 +122,7 @@ def run(
 
     meta = {
         **prev_meta,
-        "ae_threshold":           float(det.threshold) if hasattr(det, "threshold") else None,
+        "ae_threshold":           float(ae_model.threshold) if hasattr(ae_model, "threshold") else None,
         "incremental_rows":       int(len(df_inc)),
         "new_savepoint_max_id":   int(new_max_id),
         "xgboost_frozen":         True,
@@ -136,8 +136,8 @@ def run(
 
 def _ae_regression_gate(
     prev_artefact_dir: str,
-    candidate_det,
-    det_scaler,
+    candidate_ae: object,
+    ae_scaler,
     progress,
 ) -> dict | None:
     """
@@ -166,15 +166,15 @@ def _ae_regression_gate(
 
     try:
         from core.registry import get_detector
-        incumbent_cls = type(candidate_det)
-        incumbent = incumbent_cls.load(incumbent_path)
+        incumbent_cls = type(candidate_ae)
+        incumbent_ae = incumbent_cls.load(incumbent_path)
     except Exception as e:
         progress(f"AE regression gate: could not load incumbent ({e}) — skipping.")
         return None
 
-    def _eval(det) -> tuple[float, float]:
-        scores = det.score_batch(X_reg)
-        thresh = det.threshold or 0.0
+    def _eval(ae_instance) -> tuple[float, float]:
+        scores = ae_instance.score_batch(X_reg)
+        thresh = ae_instance.threshold or 0.0
         flags  = (scores > thresh).astype(int)
         attack_rows = y_reg == 1
         benign_rows = y_reg == 0
@@ -182,8 +182,8 @@ def _ae_regression_gate(
         far    = float(flags[benign_rows].mean()) if benign_rows.sum() > 0 else 0.0
         return recall, far
 
-    inc_recall, inc_far   = _eval(incumbent)
-    cand_recall, cand_far = _eval(candidate_det)
+    inc_recall, inc_far   = _eval(incumbent_ae)
+    cand_recall, cand_far = _eval(candidate_ae)
 
     recall_drop = inc_recall - cand_recall   # positive = candidate is worse
     far_increase = cand_far - inc_far         # positive = candidate raises FAR
@@ -215,7 +215,7 @@ def _ae_regression_gate(
     }
 
 
-def _extract(df: pd.DataFrame, vt, corr_mask, feature_selector, scaler):
+def _extract(df: pd.DataFrame, var_thresh, corr_mask, feature_selector, scaler):
     label_col = next((c for c in df.columns if c in {"label", "Label"}), None)
     y = df[label_col].values if label_col else np.array(["UNKNOWN"] * len(df))
     feature_cols = [c for c in df.columns if c not in _META_COLS]
@@ -226,7 +226,7 @@ def _extract(df: pd.DataFrame, vt, corr_mask, feature_selector, scaler):
         .replace([float("inf"), float("-inf")], 0)
         .values
     )
-    X = vt.transform(X)
+    X = var_thresh.transform(X)
     if corr_mask is not None:
         X = X[:, corr_mask]
     if feature_selector is not None:
