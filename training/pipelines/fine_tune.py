@@ -1,10 +1,10 @@
 """
-Fine-tune pipeline.
+AE retraining pipeline (AE-only, periodic).
 
-XGBoost:       full cumulative retrain on all labelled_flows up to the new savepoint
-               (no weight carry-over; trees are additive).
-MLPAutoencoder: load previous weights -> freeze encoder N epochs -> fine-tune on
-               incremental rows + replay buffer -> unfreeze.
+XGBoost: frozen at the base CIC-IDS2017 artefact — always copied from prev_artefact_dir,
+         never retrained here. Inference always uses the same base XGBoost model.
+MLPAutoencoder: load previous weights → freeze encoder N epochs → fine-tune on
+                incremental analyst-labelled flows + replay buffer → unfreeze.
 """
 from __future__ import annotations
 import json
@@ -17,7 +17,6 @@ import numpy as np
 import pandas as pd
 
 from training.data_loader import (
-    load_cumulative,
     load_incremental,
     load_replay_buffer,
     get_max_flow_id,
@@ -37,14 +36,15 @@ def run(
     on_progress: Callable[[str], None] | None = None,
 ) -> dict:
     """
-    Fine-tune from the label store. Save new artefacts to artefact_dir.
+    AE-only retraining from analyst-labelled flows. XGBoost is always copied
+    unchanged from prev_artefact_dir — it is never retrained here.
     """
     def progress(msg: str):
         if on_progress:
             on_progress(msg)
 
     from api.config import settings
-    from core.registry import get_classifier, get_detector
+    from core.registry import get_detector
 
     # Load preprocessing artefacts from previous version
     vt = joblib.load(os.path.join(prev_artefact_dir, "variance_threshold.joblib"))
@@ -57,24 +57,13 @@ def run(
     feature_selector = _load_opt("feature_selector.joblib")
 
     # Prefer new dual scalers; fall back to legacy single scaler
-    clf_scaler = _load_opt("clf_scaler.joblib") or _load_opt("scaler.joblib")
     det_scaler = _load_opt("det_scaler.joblib") or _load_opt("scaler.joblib")
 
     new_max_id = get_max_flow_id()
     progress(f"New savepoint max_flow_id = {new_max_id}")
+    progress("Fetching incremental analyst-labelled flows ...")
 
-    # XGBoost: cumulative retrain
-    progress("Loading all labelled flows for cumulative retrain ...")
-    df_cumulative = load_cumulative(new_max_id)
-    X_clf, y_clf = _extract(df_cumulative, vt, corr_mask, feature_selector, clf_scaler)
-    progress(f"  {len(X_clf):,} rows")
-
-    clf_cls = get_classifier(classifier_type)
-    clf = clf_cls()
-    progress(f"Training {classifier_type} ...")
-    clf.fit(X_clf, y_clf)
-
-    # AE: incremental rows + replay buffer
+    # AE: incremental rows (analyst verdicts since last savepoint) + replay buffer
     df_inc    = load_incremental(prev_savepoint_max_id, new_max_id)
     df_replay = load_replay_buffer(prev_savepoint_max_id, settings.ae_replay_buffer_fraction)
     X_inc, y_inc = _extract(df_inc,    vt, corr_mask, feature_selector, det_scaler)
@@ -89,31 +78,31 @@ def run(
     det = det_cls.load(os.path.join(prev_artefact_dir, "detector.joblib"))
     det.fine_tune(X_inc_benign, X_rep_benign if X_rep_benign is not None and len(X_rep_benign) else None)
 
-    # Evaluate on cumulative test rows
-    from training.pipelines.initial import _compute_metrics
-    n = len(X_clf)
-    test_start = int(n * 0.9)
-    if test_start < n:
-        y_pred_arr = [clf.predict(X_clf[i:i+1])[0] for i in range(test_start, n)]
-        if y_pred_arr and isinstance(y_pred_arr[0], tuple):
-            y_pred_arr = [p[0] for p in y_pred_arr]
-        metrics = _compute_metrics(y_clf[test_start:], y_pred_arr)
-    else:
-        metrics = {"f1": 0.0, "far": 0.0, "amr": 0.0}
-    progress(f"Test  F1={metrics['f1']:.4f}  FAR={metrics['far']:.4f}  AMR={metrics['amr']:.4f}")
-
     # AE candidate regression gate: compare candidate vs incumbent on fixed snapshot.
     # Snapshot created during initial training: regression_X.npy + regression_y_is_attack.npy
     reg_metrics = _ae_regression_gate(
         prev_artefact_dir, det, det_scaler, progress
     )
+    metrics = {"f1": 0.0, "far": 0.0, "amr": 0.0}
     if reg_metrics:
+        # Expose gate recall/FAR as primary metrics for this AE-only version
+        metrics["recall"] = reg_metrics.get("ae_gate_candidate_recall", 0.0)
+        metrics["far"]    = reg_metrics.get("ae_gate_candidate_far", 0.0)
         metrics.update(reg_metrics)
+    progress(f"AE retrain recall={metrics.get('recall', 0):.4f}  FAR={metrics.get('far', 0):.4f}")
 
     # Save artefacts
     progress("Saving artefacts ...")
     os.makedirs(artefact_dir, exist_ok=True)
-    clf.save(os.path.join(artefact_dir, "classifier.joblib"))
+
+    # Copy frozen base classifier — never retrained
+    progress("Copying frozen base XGBoost classifier ...")
+    base_clf_src = os.path.join(prev_artefact_dir, "classifier.joblib")
+    if os.path.exists(base_clf_src):
+        shutil.copy2(base_clf_src, os.path.join(artefact_dir, "classifier.joblib"))
+    else:
+        raise RuntimeError("Base classifier.joblib not found in prev_artefact_dir — cannot proceed.")
+
     det.save(os.path.join(artefact_dir, "detector.joblib"))
 
     # Copy all preprocessing artefacts and feature schema from previous version
@@ -134,9 +123,9 @@ def run(
     meta = {
         **prev_meta,
         "ae_threshold":           float(det.threshold) if hasattr(det, "threshold") else None,
-        "cumulative_rows":        int(len(df_cumulative)),
         "incremental_rows":       int(len(df_inc)),
         "new_savepoint_max_id":   int(new_max_id),
+        "xgboost_frozen":         True,
         **(reg_metrics or {}),
     }
     with open(os.path.join(artefact_dir, "metadata.json"), "w") as f:

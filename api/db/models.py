@@ -76,7 +76,7 @@ class TrainingRun(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     celery_task_id: Mapped[str | None] = mapped_column(String(256))
-    mode: Mapped[str] = mapped_column(String(16))   # initial | fine_tune
+    mode: Mapped[str] = mapped_column(String(16))   # initial | ae_retrain
     row_count: Mapped[int | None] = mapped_column(Integer)
     model_version_id: Mapped[int | None] = mapped_column(Integer, ForeignKey("model_versions.id"))
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

@@ -87,19 +87,14 @@ _STEP_INITIAL: list[tuple[str, int]] = [
     ("Saving model",             92),
     ("Loading model",            97),
 ]
-_STEP_FINE_TUNE: list[tuple[str, int]] = [
+_STEP_AE_RETRAIN: list[tuple[str, int]] = [
     ("Fetching incremental",     5),
-    ("Loading previous",        10),
-    ("Step 1/3",                18),
-    ("Step 2/3",                28),
-    ("Step 3/3",                36),
-    ("Feature engineering:",    44),
-    ("Scaler --",               50),
-    ("Retraining ",             58),    # "Retraining xgboost …"
-    ("Evaluating",              70),
-    ("Fine-tuning",             78),    # "Fine-tuning AE …"
-    ("Replay buffer",           84),
-    ("Saving",                  90),
+    ("New savepoint",           10),
+    ("replay benign",           30),
+    ("Fine-tuning",             50),    # "Fine-tuning mlp_ae …"
+    ("AE regression gate",      68),
+    ("Copying frozen",          78),
+    ("Saving artefacts",        88),
     ("Loading model",           97),
 ]
 
@@ -244,8 +239,8 @@ def _run_initial(run_id: str, classifier_type: str, detector_type: str,
         _cleanup_later(run_id)
 
 
-def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
-                   loop: asyncio.AbstractEventLoop) -> None:
+def _run_ae_retrain(run_id: str, classifier_type: str, detector_type: str,
+                    loop: asyncio.AbstractEventLoop) -> None:
     from api.config import settings
     from api.database import get_sync_db
     from api.db.crud import (
@@ -257,7 +252,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
     from core.store import model_store
     from training.pipelines.fine_tune import run as pipeline_run
 
-    emit_step = _make_step_emitter(_STEP_FINE_TUNE, run_id, loop)
+    emit_step = _make_step_emitter(_STEP_AE_RETRAIN, run_id, loop)
 
     def progress(msg: str):
         print(f"[training:{run_id[:8]}] {msg}", flush=True)
@@ -284,7 +279,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
         name = _version_name(classifier_type, detector_type, version_id)
         set_model_version_path_and_name(db, version_id, artefact_dir, name)
         progress(f"Registered {name}")
-        create_training_run(db, run_id, "fine_tune", version_id)
+        create_training_run(db, run_id, "ae_retrain", version_id)
 
         result = pipeline_run(
             prev_artefact_dir=prev_mv.artefact_path,
@@ -342,7 +337,7 @@ def _run_fine_tune(run_id: str, classifier_type: str, detector_type: str,
         )
 
         _put(run_id, "step", "100", loop)
-        _put(run_id, "done", f"Fine-tune complete — {name} active", loop)
+        _put(run_id, "done", f"AE retrain complete — {name} active", loop)
 
     except Exception as exc:
         err = str(exc)
@@ -371,7 +366,11 @@ async def dispatch(mode: str, classifier_type: str, detector_type: str) -> str:
     # a worker thread (which is deprecated / unreliable in Python 3.10+).
     loop = asyncio.get_running_loop()
 
-    target = _run_initial if mode == "initial" else _run_fine_tune
+    # ae_retrain is the canonical mode; fine_tune is kept as a legacy alias
+    if mode == "initial":
+        target = _run_initial
+    else:
+        target = _run_ae_retrain
     _executor.submit(target, run_id, classifier_type, detector_type, loop)
     return run_id
 

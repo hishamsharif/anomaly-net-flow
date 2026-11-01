@@ -12,13 +12,11 @@ services:
     volumes:
       # Dataset CSVs and SQLite DB — persisted on the host, not baked into the image.
       # Place CIC-IDS2017 CSV files in data/CIC-IDS2017/ before the first training run.
+      # If CICIDS2017_GDRIVE_FILE_ID is set in .env, the API will auto-download on first run.
       # See README.md → "Quick start — Docker" for dataset download instructions.
       - ./data:/app/data
       # Trained model artefacts — persisted so restarting the container keeps the model.
       - ./models:/app/models
-      # CSV symlink target — data/CIC-IDS2017/ contains symlinks pointing here.
-      # Mount the actual CSV directory so Docker can resolve them.
-      - /home/hhaniffa/dev/modules/CS7003NU-Advanced-AI-Technologies/dev/anomaly-framework/data/cic-ids-2017:/home/hhaniffa/dev/modules/CS7003NU-Advanced-AI-Technologies/dev/anomaly-framework/data/cic-ids-2017:ro
     env_file:
       - .env
     environment:

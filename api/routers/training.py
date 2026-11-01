@@ -11,7 +11,11 @@ from api import tasks
 
 router = APIRouter(prefix="/training", tags=["training"])
 
-_DEFAULT_ESTIMATE = {"initial": (1500, "~25 min"), "fine_tune": (480, "~8 min")}
+_DEFAULT_ESTIMATE = {
+    "initial":   (1500, "~25 min"),
+    "ae_retrain": (300, "~5 min"),
+    "fine_tune":  (300, "~5 min"),   # legacy alias
+}
 
 
 async def _estimate_seconds(db: AsyncSession, mode: str) -> tuple[int, str]:
@@ -58,8 +62,9 @@ class TrainingStartResponse(BaseModel):
 
 @router.post("/start", response_model=TrainingStartResponse, status_code=202)
 async def start_training(req: TrainingStartRequest, db: AsyncSession = Depends(get_db)):
-    if req.mode not in ("initial", "fine_tune"):
-        raise HTTPException(400, f"mode must be 'initial' or 'fine_tune', got '{req.mode}'")
+    _valid = ("initial", "ae_retrain", "fine_tune")
+    if req.mode not in _valid:
+        raise HTTPException(400, f"mode must be one of {_valid}, got '{req.mode}'")
     if req.classifier_type not in CLASSIFIERS:
         raise HTTPException(400, f"Unknown classifier '{req.classifier_type}'")
     if req.detector_type not in ANOMALY_DETECTORS:

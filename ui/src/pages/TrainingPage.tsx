@@ -48,6 +48,7 @@ export default function TrainingPage({ hasModel }: Props) {
   const [logs, setLogs] = useState<string[]>([])
   const [pct, setPct] = useState<number | null>(null)
   const [verdictCount, setVerdictCount] = useState(0)
+  const [eligibleCount, setEligibleCount] = useState(0)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   const [classifiers, setClassifiers] = useState<string[]>(['xgboost'])
@@ -63,7 +64,10 @@ export default function TrainingPage({ hasModel }: Props) {
   const fetchHistory = () =>
     fetch('/api/models/').then(r => r.json()).then(d => setHistory(d.models ?? [])).catch(() => {})
   const fetchVerdicts = () =>
-    fetch('/api/alerts/metrics').then(r => r.json()).then(d => setVerdictCount(d.verdict_count ?? 0)).catch(() => {})
+    fetch('/api/alerts/metrics').then(r => r.json()).then(d => {
+      setVerdictCount(d.verdict_count ?? 0)
+      setEligibleCount(d.retraining_eligible_count ?? 0)
+    }).catch(() => {})
   const fetchTypes = () =>
     fetch('/api/training/available-types').then(r => r.json()).then(d => {
       if (d.classifiers?.length) setClassifiers(d.classifiers)
@@ -94,14 +98,18 @@ export default function TrainingPage({ hasModel }: Props) {
     }, 5000)
   }
 
-  const startTraining = async (mode: 'initial' | 'fine_tune') => {
+  const startTraining = async (mode: 'initial' | 'ae_retrain') => {
     setTraining(true); setPct(0)
-    setLogs([`Starting ${mode === 'initial' ? 'initial' : 'fine-tune'} training…`])
+    setLogs([`Starting ${mode === 'initial' ? 'initial training (XGBoost + AE)' : 'AE-only retrain with transfer learning'}…`])
     try {
       const resp = await fetch('/api/training/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, classifier_type: clf, detector_type: det }),
+        body: JSON.stringify({
+          mode,
+          classifier_type: clf,
+          detector_type: mode === 'initial' ? det : (activeModel?.detector_type ?? det),
+        }),
       })
       if (!resp.ok) {
         const err = await resp.json().catch(() => ({ detail: resp.statusText }))
@@ -233,33 +241,26 @@ export default function TrainingPage({ hasModel }: Props) {
                 </div>
               </div>
 
-              <details className="card" style={{ cursor: 'pointer' }}>
-                <summary style={{ fontWeight: 600, userSelect: 'none' }}>Train a different model pair</summary>
-                <p style={{ marginTop: 8, fontSize: 13, color: 'var(--fg-muted)' }}>
-                  Retrains on the full CIC-IDS2017 dataset. The new model becomes active; the current one is archived.
-                </p>
-                <ModelSelector />
-                <button className="btn btn-primary" disabled={training} onClick={() => startTraining('initial')}>
-                  {training ? 'Training…' : `Train ${label(CLF_LABELS, clf)} + ${label(DET_LABELS, det)}`}
-                </button>
-              </details>
-
               <div className="card">
-                <strong>Incremental fine-tune</strong>
-                <p style={{ marginTop: 4 }}>
-                  Analyst verdicts since last training: <strong>{verdictCount}</strong> / {K}
+                <strong>Periodic AE Retrain</strong>
+                <p style={{ marginTop: 4, fontSize: 13, color: 'var(--fg-muted)', lineHeight: 1.5 }}>
+                  Only the <strong>MLP Autoencoder</strong> retrains — with transfer learning from the
+                  previous AE checkpoint. The base XGBoost classifier (CIC-IDS2017) is frozen and never retrained.
+                </p>
+                <p style={{ marginTop: 8 }}>
+                  Retraining-eligible verdicts (confirmed/override): <strong>{eligibleCount}</strong> / {K}
                 </p>
                 <div className="progress-wrap">
-                  <div className="progress-bar" style={{ width: `${Math.min((verdictCount / K) * 100, 100)}%` }} />
+                  <div className="progress-bar" style={{ width: `${Math.min((eligibleCount / K) * 100, 100)}%` }} />
                 </div>
-                {verdictCount < K && (
+                {eligibleCount < K && (
                   <p style={{ fontSize: 13, marginTop: 6, color: 'var(--fg-muted)' }}>
-                    Submit {K - verdictCount} more verdict{K - verdictCount !== 1 ? 's' : ''} on the Inference tab to unlock fine-tuning.
+                    Submit {K - eligibleCount} more confirmed/override verdict{K - eligibleCount !== 1 ? 's' : ''} on the Inference tab to unlock AE retraining.
                   </p>
                 )}
                 <br />
-                <button className="btn btn-primary" disabled={training || verdictCount < K} onClick={() => startTraining('fine_tune')}>
-                  {training ? 'Fine-tuning…' : 'Fine-tune on analyst verdicts'}
+                <button className="btn btn-primary" disabled={training || eligibleCount < K} onClick={() => startTraining('ae_retrain')}>
+                  {training ? 'Retraining AE…' : 'Retrain AE with transfer learning'}
                 </button>
               </div>
             </>
