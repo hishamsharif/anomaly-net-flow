@@ -293,32 +293,47 @@ def _run_ae_retrain(run_id: str, classifier_type: str, detector_type: str,
         new_max_id = result.get("new_savepoint_max_id", 0)
         sp = create_savepoint(db, version_id, new_max_id, result.get("cumulative_rows", 0))
 
+        # Inherit frozen-classifier metrics from the parent version so the UI
+        # doesn't show 0.0 for known_attack_f1 after an AE-only retrain.
+        prev_metrics = prev_mv.metrics_json or {}
+
         metrics = {
-            # Core evaluation metrics
-            "f1": result["f1"],
+            # Core evaluation metrics — classifier metrics carried from parent (XGBoost frozen)
+            "f1": result["f1"] or prev_metrics.get("f1", 0.0),
             "far": result["far"],
             "amr": result["amr"],
             "recall": result.get("recall"),
-            "pr_auc": result.get("pr_auc"),
-            "known_attack_f1": result.get("known_attack_f1", 0.0),
+            "pr_auc": result.get("pr_auc") or prev_metrics.get("pr_auc"),
+            "known_attack_f1": prev_metrics.get("known_attack_f1", result.get("known_attack_f1", 0.0)),
+            # AE regression gate metrics (new for this retrain)
+            "ae_gate_status": result.get("ae_gate_status"),
+            "ae_gate_candidate_recall": result.get("ae_gate_candidate_recall"),
+            "ae_gate_candidate_far": result.get("ae_gate_candidate_far"),
+            "ae_gate_recall_drop": result.get("ae_gate_recall_drop"),
+            "ae_gate_far_increase": result.get("ae_gate_far_increase"),
             # Fine-tune row counts
             "cumulative_rows": result.get("cumulative_rows", 0),
             "incremental_rows": result.get("incremental_rows", 0),
             # Detector threshold
             "ae_threshold": result.get("ae_threshold"),
-            # Feature engineering funnel (carried over from fine-tune artefacts)
-            "n_features_initial": result.get("n_features_initial"),
-            "n_features_after_vt": result.get("n_features_after_vt"),
-            "n_features_after_corr": result.get("n_features_after_corr"),
-            "n_features_final": result.get("n_features_final"),
-            "feature_selection_k": result.get("feature_selection_k"),
-            "feature_selection_method": result.get("feature_selection_method"),
-            "clf_scaler_type": result.get("clf_scaler_type"),
-            "det_scaler_type": result.get("det_scaler_type"),
-            # Top features
-            "top_features": result.get("top_features", []),
-            "selected_feature_names": result.get("selected_feature_names", []),
-            "classes": result.get("classes", []),
+            # Feature engineering funnel — inherit from parent if not in result
+            "n_features_initial": result.get("n_features_initial") or prev_metrics.get("n_features_initial"),
+            "n_features_after_vt": result.get("n_features_after_vt") or prev_metrics.get("n_features_after_vt"),
+            "n_features_after_corr": result.get("n_features_after_corr") or prev_metrics.get("n_features_after_corr"),
+            "n_features_final": result.get("n_features_final") or prev_metrics.get("n_features_final"),
+            "feature_selection_k": result.get("feature_selection_k") or prev_metrics.get("feature_selection_k"),
+            "feature_selection_method": result.get("feature_selection_method") or prev_metrics.get("feature_selection_method"),
+            "clf_scaler_type": result.get("clf_scaler_type") or prev_metrics.get("clf_scaler_type"),
+            "det_scaler_type": result.get("det_scaler_type") or prev_metrics.get("det_scaler_type"),
+            # Training shape — carry parent values for the frozen classifier path
+            "train_rows": prev_metrics.get("train_rows"),
+            "val_rows": prev_metrics.get("val_rows"),
+            "test_rows": prev_metrics.get("test_rows"),
+            "class_distribution_train": prev_metrics.get("class_distribution_train"),
+            # Top features — carry from parent (feature set unchanged)
+            "top_features": prev_metrics.get("top_features", result.get("top_features", [])),
+            "selected_feature_names": result.get("selected_feature_names") or prev_metrics.get("selected_feature_names", []),
+            "classes": prev_metrics.get("classes", result.get("classes", [])),
             # Timing
             "training_duration_s": result.get("training_duration_s"),
             "savepoint_id": sp.id,

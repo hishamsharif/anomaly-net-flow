@@ -8,24 +8,93 @@ Underneath this sits a deeper issue: **concept drift**. Attack toolkits evolve �
 
 **AnomalyNetFlow's dual goal:**
 1. **Automate** routine SOC triage so analysts focus on genuine unknowns, not repetitive classification
-2. **Adapt** continuously — every analyst verdict is a supervision signal; fine-tuning incorporates new ground truth as it is observed, so the model tracks the evolving threat landscape rather than freezing at its training date
+2. **Adapt** continuously — every analyst verdict is a supervision signal; periodic AE fine-tuning incorporates new ground truth as it is observed, so the model tracks the evolving threat landscape rather than freezing at its training date
 
-Every analyst verdict (confirm or override) is stored. Once 50 verdicts accumulate the model can be fine-tuned — the classifier absorbs what the analyst team has seen and labelled. Over time, previously novel attack patterns graduate from "analyst review required" to "automated classification".
+---
+
+## Quick Start — Docker (recommended)
+
+**Requires only Docker Desktop installed on your machine. No Python, Node, or conda needed.**
+
+```bash
+./setup.sh
+```
+
+That single command:
+1. Checks Docker is running
+2. Copies `.env.demo` → `.env` (first time)
+3. Builds both containers (API + UI)
+4. Starts the application in the background
+5. Waits for the health check and prints the URLs
+
+**Access the application:**
+
+| | URL |
+|---|---|
+| Web UI | http://localhost:8080 |
+| REST API + Swagger | http://localhost:8000/docs |
+
+**Dataset (required for initial training):**
+
+The CIC-IDS2017 dataset is auto-downloaded on first setup if an internet connection is available.  
+If not, place the CSV files manually in `data/CIC-IDS2017/` before clicking "Train on CIC-IDS2017".  
+Source: https://www.unb.ca/cic/datasets/ids-2017.html
+
+**Docker commands after setup:**
+
+```bash
+docker compose logs -f api    # stream API logs
+docker compose stop           # stop containers
+docker compose down           # stop + remove containers
+docker compose up -d          # restart (no rebuild needed)
+```
+
+---
+
+## Quick Start — Local (no Docker)
+
+If Docker is not available, run:
+
+```bash
+./setup.sh --local
+```
+
+**Prerequisites before running:**
+
+| | What | Where |
+|---|---|---|
+| 1 | **Miniconda** (or Anaconda) | https://docs.conda.io/en/latest/miniconda.html |
+| 2 | **Node.js ≥ 20** | https://nodejs.org |
+| 3 | **CIC-IDS2017 CSV files** in `data/CIC-IDS2017/` | https://www.unb.ca/cic/datasets/ids-2017.html |
+
+After setup completes:
+
+```bash
+# Terminal 1 — API
+bash ops.sh start
+# API: http://localhost:8000  |  Swagger: http://localhost:8000/docs
+
+# Terminal 2 — UI
+bash ops.sh ui
+# UI: http://localhost:5173
+```
+
+---
 
 ## How it works
 
 **Pipeline:** Rule Engine → Known-Attack Classifier → Anomaly Detector
 
-| Stage | Automates | Analyst interaction |
-|---|---|---|
-| Rule Engine | Obvious benign traffic (fast-path exit) | None |
-| Known-Attack Classifier (XGBoost) | Repeat attack patterns from training + past fine-tunes | Verdict stored as future training signal |
-| Anomaly Detector (MLP-AE) | Flags deviations from learnt benign baseline — potential zero-days | Review + label → unlocks next fine-tune |
+| Stage | Component | Automates | Analyst interaction |
+|---|---|---|---|
+| 1 | **Rule Engine** | Obvious benign traffic (fast-path exit) | None |
+| 2 | **Known-Attack Classifier** | Repeat attack patterns (XGBoost, trained on CIC-IDS2017) | Verdict stored as future AE training signal |
+| 3 | **Anomaly Detector** | Novel / zero-day traffic (MLP Autoencoder, trained on benign only) | Review + label → unlocks periodic AE retrain |
 
 **Dataset:** CIC-IDS2017 · 2.8 M flows · 15 attack classes — provides Day 0 knowledge before any analyst interaction  
 **Models:** XGBoost (default) · Random Forest · MLP Autoencoder (default) · Isolation Forest
 
-Full design and problem statement: [`docs/architecture.md §0`](docs/architecture.md)
+Full design and problem statement: [`docs/architecture.md`](docs/architecture.md)
 
 ---
 
@@ -33,78 +102,9 @@ Full design and problem statement: [`docs/architecture.md §0`](docs/architectur
 
 ---
 
-## Quick start — Docker (recommended for evaluation)
-
-Requires only Docker Desktop. All Python, Node, and library dependencies are inside the images.
-
-### Prerequisites
-
-| # | What | Where |
-|---|---|---|
-| 1 | **Docker Desktop** | https://docs.docker.com/get-docker/ |
-| 2 | **CIC-IDS2017 CSV files** placed in `data/CIC-IDS2017/` | https://www.unb.ca/cic/datasets/ids-2017.html |
-
-### Steps
-
-```bash
-# 1. Build and start both containers
-docker compose up --build
-
-# 2. Open the UI  (waits for the API healthcheck before serving)
-open http://localhost:8080
-
-# 3. First time: click "Train on CIC-IDS2017" in the Training tab
-#    Live progress streams to the Training tab via SSE
-```
-
-**Ports**
-
-| Service | URL |
-|---|---|
-| UI (nginx SPA) | http://localhost:8080 |
-| API + Swagger docs | http://localhost:8000/docs |
-
-**Volume mounts** (data persisted on your host, not inside the container):
-
-```
-./data/    → /app/data    (CIC-IDS2017 CSVs + SQLite DB)
-./models/  → /app/models  (trained model artefacts — persisted across restarts)
-```
-
----
-
-## Quick start — Local (conda)
-
-### Prerequisites
-
-| # | What | Where to get it |
-|---|---|---|
-| 1 | **Miniconda** (or Anaconda) | https://docs.conda.io/en/latest/miniconda.html |
-| 2 | **Node.js ≥ 20** | https://nodejs.org |
-| 3 | **CIC-IDS2017 CSV files** in `data/CIC-IDS2017/` | https://www.unb.ca/cic/datasets/ids-2017.html |
-
-SQLite is file-based and created automatically on first run. No Redis, no database server.
-
-### Steps
-
-```bash
-# 1. First-time setup (creates conda env, installs deps, copies .env.demo → .env)
-bash setup.sh
-
-# 2. Start the API
-bash ops.sh start
-# API: http://localhost:8000  |  Swagger: http://localhost:8000/docs
-
-# 3. Start the UI  (separate terminal)
-bash ops.sh ui
-# UI: http://localhost:5173
-```
-
----
-
 ## First run: initial training
 
-Open the **Training** tab — a *"Train on CIC-IDS2017"* button appears because no model is active yet. Select your classifier and detector, then click it, or trigger from the terminal:
+Open the **Training → Train & Evaluate** tab. Since no model is active yet, you will see a *"Train on CIC-IDS2017"* card. Select your classifier and detector and click the button, or trigger from the terminal:
 
 ```bash
 bash ops.sh train initial
@@ -117,60 +117,7 @@ Training reads the CIC-IDS2017 CSVs directly (no import step), runs feature engi
 | Role | Options |
 |---|---|
 | Classifier | `xgboost` (default), `random_forest` |
-| Anomaly Detector | `mlp_ae` (default), `isolation_forest`, `transfer_ae` (UNSW-NB15 pretrain → CIC fine-tune) |
-
----
-
-## Operations reference
-
-```
-bash setup.sh                  First-time setup (run once)
-
-bash ops.sh start              Start the API in background (logs → logs/api.log)
-bash ops.sh fg                 Start the API in foreground (Ctrl-C to stop)
-bash ops.sh stop               Stop the API
-bash ops.sh restart            Restart the API
-bash ops.sh status             Show running status + health check
-bash ops.sh logs               Tail the background log  (Ctrl-C to exit)
-bash ops.sh ui                 Start the React UI  (port 5173)
-bash ops.sh train initial      Trigger initial training
-bash ops.sh train fine_tune    Trigger incremental fine-tune
-bash ops.sh verify             Check setup is complete
-bash ops.sh open               Open the UI in your browser
-bash ops.sh help               Show all commands
-```
-
-**Logging:**
-
-| Mode | How to run | Where logs go |
-|---|---|---|
-| Background (default) | `bash ops.sh start` | `logs/api.log` — read with `bash ops.sh logs` |
-| Foreground (troubleshooting) | `bash ops.sh fg` | Directly to terminal — Ctrl-C to stop |
-
----
-
-## How it works
-
-```
-data/CIC-IDS2017/*.csv         Original dataset — stays as CSV, no import
-         │
-         │   DuckDB reads directly at training time
-         ▼
-  Initial model trained (Classifier + Anomaly Detector)
-         │
-  Analyst uploads CSV or PCAP → 3-stage inference pipeline
-  (Rule engine → Classifier → MLP Autoencoder)
-         │
-  Predicted label + anomaly score per flow, displayed in UI
-         │
-  Analyst confirms or corrects labels → SQLite
-         │
-  anomaly_net_flow.db          SQLite (analyst verdicts only)
-         │
-         │   Unlocks after 50 verdicts (configurable)
-         ▼
-  Incremental fine-tune → improved model version
-```
+| Anomaly Detector | `mlp_ae` (default), `isolation_forest` |
 
 ---
 
@@ -195,8 +142,37 @@ Every alert includes an explainability signal:
 3. Submit a verdict:
    - **Confirm** — prediction was correct
    - **Override** — select the correct label
-4. Both verdict types are stored in the label store
-5. After 50 verdicts, **Fine-tune** unlocks on the Training tab
+4. Both verdict types are stored and count toward the retraining threshold
+5. After 50 confirmed/override verdicts, **Retrain AE** unlocks on the Training tab
+
+The XGBoost classifier is **frozen** at its initial CIC-IDS2017 weights permanently.  
+Only the MLP Autoencoder is periodically fine-tuned (transfer learning from the previous AE checkpoint) using analyst-labelled benign flows.
+
+---
+
+## Operations reference (local mode)
+
+```
+bash ops.sh start              Start the API in background (logs → logs/api.log)
+bash ops.sh fg                 Start the API in foreground (Ctrl-C to stop)
+bash ops.sh stop               Stop the API
+bash ops.sh restart            Restart the API
+bash ops.sh status             Show running status + health check
+bash ops.sh logs               Tail the background log (Ctrl-C to exit)
+bash ops.sh ui                 Start the React UI dev server (port 5173)
+bash ops.sh train initial      Trigger initial training
+bash ops.sh train ae_retrain   Trigger periodic AE retrain
+bash ops.sh verify             Check setup is complete
+bash ops.sh open               Open the UI in your browser
+bash ops.sh help               Show all commands
+```
+
+**Logging:**
+
+| Mode | How to run | Where logs go |
+|---|---|---|
+| Background (default) | `bash ops.sh start` | `logs/api.log` — read with `bash ops.sh logs` |
+| Foreground (troubleshooting) | `bash ops.sh fg` | Directly to terminal — Ctrl-C to stop |
 
 ---
 
@@ -218,7 +194,30 @@ Base URL: `http://localhost:8000` · Full interactive docs: `http://localhost:80
 | POST | `/api/predict/batch` | Upload CSV or PCAP for batch inference | Yes |
 | GET | `/api/alerts/` | Inference alerts (paginated) | Yes |
 | POST | `/api/alerts/{id}/feedback` | Submit analyst verdict | Yes |
-| GET | `/api/alerts/metrics` | Verdict count toward fine-tune threshold | Yes |
+| GET | `/api/alerts/metrics` | Verdict count toward retrain threshold | Yes |
+
+---
+
+## Configuration
+
+All settings have working defaults — no configuration needed for a local run.
+
+```bash
+cp .env.demo .env   # then edit as needed
+```
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/anomaly_net_flow.db` | SQLite database path |
+| `BUNDLED_DATASET_DIR` | `data/CIC-IDS2017` | CIC-IDS2017 CSV folder |
+| `FINE_TUNE_K_THRESHOLD` | `50` | Analyst verdicts needed to unlock AE retrain |
+| `AE_REPLAY_BUFFER_FRACTION` | `0.1` | Old benign data replayed during AE retrain (prevents forgetting) |
+| `AE_ANOMALY_THRESHOLD_PERCENTILE` | `95` | Anomaly decision boundary percentile (p90=more alerts, p99=fewer) |
+| `SMOTE_MAX_PER_CLASS` | `50000` | Max synthetic samples per minority class (caps training set size) |
+| `FEATURE_SELECTION_K` | `0` (disabled) | Keep only top-K features after VT + corr pruning; 0 = keep all |
+| `FEATURE_SELECTION_METHOD` | `mi` | Feature selection: `mi` (mutual info) · `rfe` (RF-RFE) · `none` |
+| `CORS_ORIGINS` | `http://localhost:5173,http://localhost,http://localhost:3000` | Allowed browser origins |
+| `MAX_UPLOAD_MB` | `100` | Max inference file upload size |
 
 ---
 
@@ -226,8 +225,8 @@ Base URL: `http://localhost:8000` · Full interactive docs: `http://localhost:80
 
 ```
 anomaly-net-flow/
-├── setup.sh                      First-time setup
-├── ops.sh                        All runtime operations
+├── setup.sh                      First-time setup (Docker by default; --local for conda)
+├── ops.sh                        All runtime operations (local mode)
 ├── api/                          FastAPI HTTP layer (no ML logic)
 │   ├── main.py                   Entry point: uvicorn api.main:app
 │   ├── config.py                 Settings (.env / environment variables)
@@ -246,7 +245,7 @@ anomaly-net-flow/
 ├── training/                     Batch training processes
 │   ├── pipelines/
 │   │   ├── initial.py            CIC-IDS2017 CSVs → Classifier + Detector
-│   │   └── fine_tune.py          Analyst verdicts from SQLite → incremental update
+│   │   └── fine_tune.py          AE-only periodic retrain (analyst verdicts → AE update)
 │   ├── feature_eng/
 │   │   └── pipeline.py           FeatureEngineeringPipeline (VT → corr → MI|RF-RFE → scaler)
 │   └── data_loader.py            DuckDB queries (CSV + SQLite)
@@ -255,8 +254,6 @@ anomaly-net-flow/
 │   │   ├── csv_adapter.py        CSV upload → feature DataFrame
 │   │   └── pcap_adapter.py       PCAP upload → NFStream flow extraction
 │   └── explainers/               SHAP (Stage 2) + AE per-feature reconstruction error (Stage 3)
-├── scripts/
-│   └── tune_xgb.py               Standalone XGBoost hyperparameter search (RandomizedSearchCV)
 ├── ui/                           React 18 + TypeScript + Vite 5
 │   └── src/pages/                AboutPage · TrainingPage · InferencePage
 ├── data/CIC-IDS2017/             Place dataset CSV files here (.gitignored)
@@ -271,40 +268,16 @@ anomaly-net-flow/
 
 ---
 
-## Configuration
-
-All settings have working defaults — no configuration needed for a local run.
-
-```bash
-cp .env.demo .env   # then edit as needed
-```
-
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `sqlite+aiosqlite:///./data/anomaly_net_flow.db` | SQLite database path |
-| `BUNDLED_DATASET_DIR` | `data/CIC-IDS2017` | CIC-IDS2017 CSV folder |
-| `FINE_TUNE_K_THRESHOLD` | `50` | Analyst verdicts needed to unlock fine-tune |
-| `AE_REPLAY_BUFFER_FRACTION` | `0.1` | Old benign data replayed during AE fine-tune (prevents forgetting) |
-| `AE_ANOMALY_THRESHOLD_PERCENTILE` | `95` | Anomaly decision boundary percentile (p90=more alerts, p99=fewer) |
-| `SMOTE_MAX_PER_CLASS` | `50000` | Max synthetic samples per minority class (caps training set size) |
-| `FEATURE_SELECTION_K` | `0` (disabled) | Keep only top-K features after VT + corr pruning; 0 = keep all |
-| `FEATURE_SELECTION_METHOD` | `mi` | Feature selection method: `mi` (mutual info, fast) · `rfe` (RF-RFE, interaction-aware) · `none` |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost,http://localhost:3000` | Allowed browser origins (comma-separated) |
-| `MAX_UPLOAD_MB` | `100` | Max inference file upload size |
-
----
-
 ## Code navigation
 
 | If you want to understand… | Start here |
 |---|---|
-| The 3-stage pipeline end-to-end | `docs/architecture.md` §5 ML Architecture |
+| The 3-stage pipeline end-to-end | `docs/architecture.md` |
 | Model protocols (what every classifier/detector must implement) | `core/base.py` — `BaseClassifier`, `BaseAnomalyDetector` |
 | How XGBoost / MLP-AE are implemented | `core/classifiers/xgboost_clf.py`, `core/detectors/mlp_ae.py` |
-| TransferAutoencoder (UNSW-NB15 pretrain → CIC fine-tune) | `core/detectors/transfer_ae.py` |
-| RF-RFE feature selection | `training/feature_eng/pipeline.py` — `FeatureEngineeringPipeline(feature_selection_method="rfe")` |
+| RF-RFE feature selection | `training/feature_eng/pipeline.py` |
 | Initial training pipeline (CIC-IDS2017 → artefacts) | `training/pipelines/initial.py` |
-| Incremental fine-tune pipeline | `training/pipelines/fine_tune.py` |
+| AE-only periodic retrain pipeline | `training/pipelines/fine_tune.py` |
 | Feature engineering (VT → corr → MI|RFE → scaler) | `training/feature_eng/pipeline.py` |
 | How inference runs at request time | `api/routers/predict.py` |
 | Background training + SSE progress | `api/tasks.py` |

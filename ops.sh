@@ -225,8 +225,11 @@ cmd_train() {
   # --follow anywhere in args enables live SSE stream
   for arg in "$@"; do [[ "$arg" == "--follow" ]] && follow=1; done
 
-  if [[ "$mode" != "initial" && "$mode" != "fine_tune" ]]; then
-    fail "Unknown mode '$mode'. Use: initial | fine_tune"
+  # Normalise legacy alias
+  [[ "$mode" == "fine_tune" ]] && mode="ae_retrain"
+
+  if [[ "$mode" != "initial" && "$mode" != "ae_retrain" ]]; then
+    fail "Unknown mode '$mode'. Use: initial | ae_retrain"
   fi
   if ! curl -sf "http://localhost:${API_PORT}/health" >/dev/null 2>&1; then
     fail "API is not running. Start it first:  bash ops.sh start"
@@ -287,7 +290,7 @@ cmd_help() {
   echo -e "  ${CYAN}logs${NC}               Tail the background log (Ctrl-C to exit)"
   echo -e "  ${CYAN}ui${NC}                 Start the React UI  (port ${UI_PORT})"
   echo -e "  ${CYAN}train [mode] [clf] [det] [--follow]${NC}"
-  echo -e "                     Start training.  mode: initial (default) | fine_tune"
+  echo -e "                     Start training.  mode: initial (default) | ae_retrain"
   echo -e "                     clf: xgboost (default) | random_forest"
   echo -e "                     det: mlp_ae (default) | isolation_forest"
   echo -e "                     --follow: stream SSE progress to terminal"
